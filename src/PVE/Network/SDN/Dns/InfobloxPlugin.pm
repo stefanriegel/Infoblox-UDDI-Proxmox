@@ -125,11 +125,61 @@ sub find_dns_record_id {
     return $result->{results}->[0]->{id};
 }
 
-# --- DNS interface method stubs (implemented in Plan 02) ---
+# --- DNS record lifecycle methods ---
 
 sub add_a_record {
     my ($class, $plugin_config, $zone, $hostname, $ip, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $view_name = $plugin_config->{dns_view} || 'default';
+    my $fqdn = "${hostname}.${zone}";
+
+    # Resolve DNS View ID
+    my $view_id = get_dns_view_id($plugin_config);
+    if (!$view_id) {
+        die "DNS View \"$view_name\" not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    # Resolve auth zone ID
+    my $zone_id = get_auth_zone_id($plugin_config, $zone, $view_id);
+    if (!$zone_id) {
+        die "zone $zone not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    eval {
+        # Check for existing A record (GET-before-POST idempotency)
+        my $existing_id = find_dns_record_id($plugin_config, $fqdn, 'A', $view_id);
+
+        my $ttl = $plugin_config->{ttl} || 3600;
+        my $params = {
+            type    => 'A',
+            rdata   => { address => $ip },
+            ttl     => $ttl,
+            comment => 'managed by proxmox',
+            tags    => { source => 'proxmox' },
+        };
+
+        if ($existing_id) {
+            # Record exists -- update via PATCH
+            infoblox_api_request($plugin_config, "PATCH",
+                "/dns/record/$existing_id", $params);
+        } else {
+            # Create new record via POST
+            $params->{name_in_zone} = $hostname;
+            $params->{zone}         = $zone_id;
+            $params->{view}         = $view_id;
+            infoblox_api_request($plugin_config, "POST",
+                "/dns/record", $params);
+        }
+    };
+
+    if ($@) {
+        die "error adding A record $fqdn: $@\n" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub add_ptr_record {
@@ -139,7 +189,35 @@ sub add_ptr_record {
 
 sub del_a_record {
     my ($class, $plugin_config, $zone, $hostname, $ip, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $view_name = $plugin_config->{dns_view} || 'default';
+    my $fqdn = "${hostname}.${zone}";
+
+    # Resolve DNS View ID
+    my $view_id = get_dns_view_id($plugin_config);
+    if (!$view_id) {
+        die "DNS View \"$view_name\" not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    eval {
+        # Find existing A record
+        my $record_id = find_dns_record_id($plugin_config, $fqdn, 'A', $view_id);
+
+        if ($record_id) {
+            # Record found -- delete it
+            infoblox_api_request($plugin_config, "DELETE",
+                "/dns/record/$record_id", undef);
+        }
+        # If not found, return silently (idempotent delete)
+    };
+
+    if ($@) {
+        die "error deleting A record $fqdn: $@\n" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub del_ptr_record {

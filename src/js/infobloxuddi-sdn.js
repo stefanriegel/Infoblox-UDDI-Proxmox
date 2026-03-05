@@ -62,6 +62,7 @@ Ext.define('PVE.sdn.ipams.InfobloxuddiInputPanel', {
 		xtype: 'textfield',
 		name: 'url',
 		fieldLabel: gettext('URL'),
+		emptyText: 'https://csp.eu.infoblox.com',
 		allowBlank: false,
 	    },
 	    {
@@ -126,6 +127,7 @@ Ext.define('PVE.sdn.dns.InfobloxuddiInputPanel', {
 		xtype: 'textfield',
 		name: 'url',
 		fieldLabel: gettext('URL'),
+		emptyText: 'https://csp.eu.infoblox.com',
 		allowBlank: false,
 	    },
 	    {

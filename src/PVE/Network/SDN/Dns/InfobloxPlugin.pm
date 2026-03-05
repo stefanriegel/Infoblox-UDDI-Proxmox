@@ -41,9 +41,12 @@ sub options {
 sub infoblox_api_request {
     my ($config, $method, $path, $params) = @_;
 
+    my $url = $config->{url};
+    $url = "https://$url" if $url !~ m|^https?://|;
+
     return PVE::Network::SDN::api_request(
         $method,
-        "$config->{url}/api/ddi/v1${path}",
+        "${url}/api/ddi/v1${path}",
         [
             'Content-Type',  'application/json; charset=UTF-8',
             'Authorization', "Token $config->{token}",

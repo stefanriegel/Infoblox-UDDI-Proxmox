@@ -175,7 +175,46 @@ sub update_subnet {
 
 sub add_ip {
     my ($class, $plugin_config, $subnetid, $subnet, $ip, $hostname, $mac, $vmid, $is_gateway, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $space_id = get_ip_space_id($plugin_config, $plugin_config->{ip_space});
+    if (!$space_id) {
+        die "IP Space \"$plugin_config->{ip_space}\" not found\n" if !$noerr;
+        return;
+    }
+
+    eval {
+        # GET-before-POST: check if address already exists
+        my $existing_id = get_address_id($plugin_config, $ip, $space_id);
+
+        my $comment = $is_gateway ? "gateway" : $hostname;
+        my $params = build_address_params($comment, $mac, $vmid);
+        $params->{tags}->{gateway} = "true" if $is_gateway;
+
+        if ($existing_id) {
+            # Address exists -- update metadata (idempotent)
+            infoblox_api_request(
+                $plugin_config, "PATCH",
+                "/ipam/address/$existing_id",
+                $params,
+            );
+        } else {
+            # Create new address
+            $params->{address} = $ip;
+            $params->{space} = $space_id;
+            infoblox_api_request(
+                $plugin_config, "POST",
+                "/ipam/address",
+                $params,
+            );
+        }
+    };
+
+    if ($@) {
+        die "error adding IP $ip: $@" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub update_ip {

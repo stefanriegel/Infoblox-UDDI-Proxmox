@@ -370,9 +370,9 @@ sub add_range_next_freeip {
 sub get_ips_from_mac {
     my ($class, $plugin_config, $mac, $zone) = @_;
 
-    # Return format matches NetboxPlugin: {ip4 => {ip => 1}, ip6 => {}}
-    my $ip4 = {};
-    my $ip6 = {};
+    # Returns ($ip4_scalar, $ip6_scalar) matching PVE's Ipams.pm expectation
+    my $ip4 = undef;
+    my $ip6 = undef;
 
     my $result = eval {
         infoblox_api_request(
@@ -387,16 +387,16 @@ sub get_ips_from_mac {
             my $ip = $addr->{address};
             next if !$ip;
             if ($ip =~ /:/) {
-                # IPv6
-                $ip6->{$ip} = 1;
+                # IPv6 — keep first match
+                $ip6 = $ip if !$ip6;
             } else {
-                # IPv4
-                $ip4->{$ip} = 1;
+                # IPv4 — keep first match
+                $ip4 = $ip if !$ip4;
             }
         }
     }
 
-    return { ip4 => $ip4, ip6 => $ip6 };
+    return ($ip4, $ip6);
 }
 
 sub on_update_hook {

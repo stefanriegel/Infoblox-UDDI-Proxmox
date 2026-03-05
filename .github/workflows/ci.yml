@@ -16,10 +16,8 @@ jobs:
         with:
           perl-version: '5.36'
 
-      - name: Install dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libnet-ip-perl libnetaddr-ip-perl libjson-perl
+      - name: Install Perl dependencies
+        run: cpanm --notest Net::IP NetAddr::IP JSON
 
       - name: Run tests
         run: prove -It/lib -Isrc -It t/

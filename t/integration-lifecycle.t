@@ -849,4 +849,486 @@ subtest 'token leak prevention: API tokens never appear in error messages' => su
     }
 };
 
+# ============================================================================
+# PITFALL 1: eval return bug - add_next_freeip returns IP not undef
+# ============================================================================
+
+subtest 'PITFALL 1: eval return bug - add_next_freeip returns IP not undef' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+    });
+    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-24/nextavailableip', {
+        results => [{ address => '10.0.0.42', id => 'ipam/address/eval-test' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/eval-test', {
+        result => {},
+    });
+
+    my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+        $ipam_config, 'simple1-10.0.0.0-24', $subnet_24,
+        'vm-eval-test', undef, 500, 0,
+    );
+    ok(defined $ip, 'return value is defined (not silently lost by eval)');
+    like($ip, qr/^\d+\.\d+\.\d+\.\d+$/, 'return value is an IP address string');
+    is($ip, '10.0.0.42', 'returns the exact IP from API response');
+};
+
+# ============================================================================
+# PITFALL 1b: eval return bug - add_range_next_freeip returns IP not undef
+# ============================================================================
+
+subtest 'PITFALL 1b: eval return bug - add_range_next_freeip returns IP not undef' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/range', {
+        results => [{ id => 'ipam/range/range-1', start => '10.0.0.50', end => '10.0.0.100' }],
+    });
+    mock_api::mock_response('POST', '/ipam/range/ipam/range/range-1/nextavailableip', {
+        results => [{ address => '10.0.0.55', id => 'ipam/address/eval-range-test' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/eval-range-test', {
+        result => {},
+    });
+
+    my $range = {
+        'start-address' => '10.0.0.50',
+        'end-address'   => '10.0.0.100',
+    };
+    my $data = {
+        hostname => 'vm-range-eval',
+        mac      => 'AA:BB:CC:DD:EE:FF',
+        vmid     => 501,
+    };
+
+    my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_range_next_freeip(
+        $ipam_config, $subnet_24, $range, $data, 0,
+    );
+    ok(defined $ip, 'return value is defined');
+    is($ip, '10.0.0.55', 'returns exact IP from range allocation');
+};
+
+# ============================================================================
+# PITFALL 2: CIDR format - address param never contains slash
+# ============================================================================
+
+subtest 'PITFALL 2: CIDR format - address param never contains slash' => sub {
+    # Test add_ip: the POST address param must be bare IP (no /24 suffix)
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', { results => [] });
+    mock_api::mock_response('POST', '/ipam/address', {
+        result => { id => 'ipam/address/cidr-test', address => '10.0.0.5' },
+    });
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_ip(
+            $ipam_config, 'simple1-10.0.0.0-24', $subnet_24,
+            '10.0.0.5', 'vm-cidr', undef, 600, 0, 0,
+        );
+    };
+    is($@, '', 'add_ip succeeds');
+
+    my $calls = mock_api::get_all_calls();
+    my @posts = grep { $_->{method} eq 'POST' } @$calls;
+    ok(scalar @posts > 0, 'POST call was made');
+    ok($posts[0]->{params}->{address} !~ /\//, 'address has no slash (bare IP, not CIDR)');
+
+    # Test add_next_freeip: the PATCH params should not contain slash in any address field
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+    });
+    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-24/nextavailableip', {
+        results => [{ address => '10.0.0.7', id => 'ipam/address/cidr-alloc-test' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/cidr-alloc-test', {
+        result => {},
+    });
+
+    my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+        $ipam_config, 'simple1-10.0.0.0-24', $subnet_24,
+        'vm-cidr-alloc', undef, 601, 0,
+    );
+    is($ip, '10.0.0.7', 'IP allocated');
+
+    # Verify the PATCH call URL does not contain a slash-delimited CIDR in the address
+    my $alloc_calls = mock_api::get_all_calls();
+    my @alloc_patches = grep { $_->{method} eq 'PATCH' } @$alloc_calls;
+    ok(scalar @alloc_patches > 0, 'PATCH call was made for metadata');
+    # The PATCH URL should reference an address ID, not contain a CIDR
+    unlike($alloc_patches[0]->{url}, qr/\/\d+$/, 'PATCH URL uses address ID, not bare IP with slash');
+
+    note('Existing unit test in ipam-infoblox.t already asserts this; this integration-level check confirms the pattern holds in context.');
+};
+
+# ============================================================================
+# PITFALL 3: overwrite on upgrade - README documents re-patching mechanism
+# ============================================================================
+
+subtest 'PITFALL 3: overwrite on upgrade - README documents re-patching mechanism' => sub {
+    # Non-code pitfall: verified via documentation. Phase 3 install script + .deb
+    # postinst handles the actual re-patching.
+
+    my $readme_path = 't/../README.md';
+    open(my $fh, '<', $readme_path) or die "Cannot open README.md: $!\n";
+    my $readme_content = do { local $/; <$fh> };
+    close($fh);
+
+    like($readme_content, qr/apt.*upgrade.*overwrite|overwrite.*apt.*upgrade|upgrade.*overwritten/i,
+        'README mentions overwrite on upgrade');
+    like($readme_content, qr/dpkg.*trigger|trigger.*dpkg/i,
+        'README mentions dpkg trigger re-patching');
+    like($readme_content, qr/re-run.*install\.sh|install\.sh.*re-run|Re-run.*install\.sh/i,
+        'README mentions re-running install script as fallback');
+
+    note('Non-code pitfall: verified via documentation. Phase 3 install script + .deb postinst handles the actual re-patching.');
+};
+
+# ============================================================================
+# PITFALL 4: Simple zone limit - README documents the constraint
+# ============================================================================
+
+subtest 'PITFALL 4: Simple zone limit - README documents the constraint' => sub {
+    # Non-code pitfall: PVE 8.x architecture constraint.
+
+    my $readme_path = 't/../README.md';
+    open(my $fh, '<', $readme_path) or die "Cannot open README.md: $!\n";
+    my $readme_content = do { local $/; <$fh> };
+    close($fh);
+
+    like($readme_content, qr/Simple Zones? only/i, 'README states Simple Zones only');
+    like($readme_content, qr/VLAN.*EVPN.*do not trigger|VLAN.*EVPN.*hooks|VLAN and EVPN zone/i,
+        'README explains VLAN/EVPN limitation');
+
+    note('Non-code pitfall: PVE 8.x architecture constraint. Plugin handles this by design (only runs when called by SDN framework for Simple zones).');
+};
+
+# ============================================================================
+# PITFALL 5: PTR prefix lengths - /24, /22, /16 reverse zones compute correctly
+# ============================================================================
+
+subtest 'PITFALL 5: PTR prefix lengths - /24, /22, /16 reverse zones compute correctly' => sub {
+
+    # /24: IP 10.0.0.5, zone 0.0.10.in-addr.arpa. found
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', 'fqdn=="0.0.10.in-addr.arpa."', {
+        results => [{ id => 'dns/auth_zone/rev-24', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+
+    my $zone_24 = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $dns_config, 'simple1-10.0.0.0-24', $subnet_24, '10.0.0.5',
+    );
+    is($zone_24, '0.0.10.in-addr.arpa.', '/24: correct reverse zone found');
+
+    # /22: IP 10.1.2.50, zone 2.1.10.in-addr.arpa. found
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', 'fqdn=="2.1.10.in-addr.arpa."', {
+        results => [{ id => 'dns/auth_zone/rev-22', fqdn => '2.1.10.in-addr.arpa.' }],
+    });
+
+    my $zone_22 = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $dns_config, 'simple1-10.1.0.0-22', $subnet_22, '10.1.2.50',
+    );
+    is($zone_22, '2.1.10.in-addr.arpa.', '/22: correct reverse zone for non-base /24');
+
+    # Create PTR for /22 and verify name_in_zone is '50'
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev-22', fqdn => '2.1.10.in-addr.arpa.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', { results => [] });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/ptr-pit5-22' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $dns_config, '2.1.10.in-addr.arpa.', 'vm-pit5.example.com', '10.1.2.50', 0,
+        );
+    };
+    is($@, '', 'PTR record created for /22 IP');
+    my $calls_22 = mock_api::get_all_calls();
+    my @posts_22 = grep { $_->{method} eq 'POST' } @$calls_22;
+    is($posts_22[0]->{params}->{name_in_zone}, '50', '/22: name_in_zone is "50"');
+
+    # /16: IP 172.16.5.10, /24 zone not found, /16 zone found
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', 'fqdn=="5.16.172.in-addr.arpa."', { results => [] });
+    mock_api::mock_response('GET', 'fqdn=="16.172.in-addr.arpa."', {
+        results => [{ id => 'dns/auth_zone/rev-16', fqdn => '16.172.in-addr.arpa.' }],
+    });
+
+    my $zone_16 = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $dns_config, 'simple1-172.16.0.0-16', $subnet_16, '172.16.5.10',
+    );
+    is($zone_16, '16.172.in-addr.arpa.', '/16: correct reverse zone after /24 fallback');
+
+    # Create PTR for /16 and verify name_in_zone is '10.5'
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev-16', fqdn => '16.172.in-addr.arpa.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', { results => [] });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/ptr-pit5-16' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $dns_config, '16.172.in-addr.arpa.', 'vm-pit5.example.com', '172.16.5.10', 0,
+        );
+    };
+    is($@, '', 'PTR record created for /16 IP');
+    my $calls_16 = mock_api::get_all_calls();
+    my @posts_16 = grep { $_->{method} eq 'POST' } @$calls_16;
+    is($posts_16[0]->{params}->{name_in_zone}, '10.5', '/16: name_in_zone is "10.5"');
+
+    # /25 (sub-octet): IP 10.0.0.200 in 10.0.0.128/25
+    # Should find 0.0.10.in-addr.arpa. (same /24 zone since /25 is sub-octet)
+    my $subnet_25 = {
+        cidr    => '10.0.0.128/25',
+        mask    => '25',
+        zone    => 'simple1',
+        network => '10.0.0.128',
+    };
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', 'fqdn=="0.0.10.in-addr.arpa."', {
+        results => [{ id => 'dns/auth_zone/rev-25', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+
+    my $zone_25 = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $dns_config, 'simple1-10.0.0.128-25', $subnet_25, '10.0.0.200',
+    );
+    is($zone_25, '0.0.10.in-addr.arpa.', '/25: finds /24 reverse zone (sub-octet)');
+
+    # Create PTR for /25 and verify name_in_zone is '200'
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev-25', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', { results => [] });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/ptr-pit5-25' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $dns_config, '0.0.10.in-addr.arpa.', 'vm-pit5.example.com', '10.0.0.200', 0,
+        );
+    };
+    is($@, '', 'PTR record created for /25 IP');
+    my $calls_25 = mock_api::get_all_calls();
+    my @posts_25 = grep { $_->{method} eq 'POST' } @$calls_25;
+    is($posts_25[0]->{params}->{name_in_zone}, '200', '/25: name_in_zone is "200"');
+};
+
+# ============================================================================
+# PITFALL 6: non-idempotent creates - repeated add uses PATCH not POST
+# ============================================================================
+
+subtest 'PITFALL 6: non-idempotent creates - repeated add uses PATCH not POST' => sub {
+
+    # --- add_subnet: called twice, both succeed (verify-only, no writes) ---
+    for my $pass (1, 2) {
+        mock_api::clear_mocks();
+        mock_api::mock_response('GET', '/ipam/ip_space', {
+            results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+        });
+        mock_api::mock_response('GET', '/ipam/subnet', {
+            results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+        });
+
+        eval {
+            PVE::Network::SDN::Ipams::InfobloxPlugin->add_subnet(
+                $ipam_config, 'simple1-10.0.0.0-24', $subnet_24, 0,
+            );
+        };
+        is($@, '', "add_subnet pass $pass succeeds");
+        my $calls = mock_api::get_all_calls();
+        my @posts = grep { $_->{method} eq 'POST' } @$calls;
+        is(scalar @posts, 0, "add_subnet pass $pass: zero POST calls (verify only)");
+    }
+
+    # --- add_ip: first call POST (new), second call PATCH (existing) ---
+    # First pass: address doesn't exist -> POST
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', { results => [] });
+    mock_api::mock_response('POST', '/ipam/address', {
+        result => { id => 'ipam/address/pit6-ip', address => '10.0.0.20' },
+    });
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_ip(
+            $ipam_config, 'simple1-10.0.0.0-24', $subnet_24,
+            '10.0.0.20', 'vm-pit6', undef, 700, 0, 0,
+        );
+    };
+    is($@, '', 'add_ip first pass succeeds');
+    my $ip1_calls = mock_api::get_all_calls();
+    my @ip1_posts = grep { $_->{method} eq 'POST' } @$ip1_calls;
+    is(scalar @ip1_posts, 1, 'add_ip first pass: used POST');
+
+    # Second pass: address exists -> PATCH
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/pit6-ip', address => '10.0.0.20' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/pit6-ip', {
+        result => { id => 'ipam/address/pit6-ip' },
+    });
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_ip(
+            $ipam_config, 'simple1-10.0.0.0-24', $subnet_24,
+            '10.0.0.20', 'vm-pit6', undef, 700, 0, 0,
+        );
+    };
+    is($@, '', 'add_ip second pass succeeds');
+    my $ip2_calls = mock_api::get_all_calls();
+    my @ip2_posts = grep { $_->{method} eq 'POST' } @$ip2_calls;
+    my @ip2_patches = grep { $_->{method} eq 'PATCH' } @$ip2_calls;
+    is(scalar @ip2_posts, 0, 'add_ip second pass: zero POST calls');
+    is(scalar @ip2_patches, 1, 'add_ip second pass: used PATCH instead');
+
+    # --- add_a_record: first call POST, second call PATCH ---
+    # First pass
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/fwd-zone-1', fqdn => 'example.com.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', { results => [] });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/pit6-a' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $dns_config, 'example.com', 'vm-pit6', '10.0.0.20', 0,
+        );
+    };
+    is($@, '', 'add_a_record first pass succeeds');
+    my $a1_calls = mock_api::get_all_calls();
+    my @a1_posts = grep { $_->{method} eq 'POST' } @$a1_calls;
+    is(scalar @a1_posts, 1, 'add_a_record first pass: used POST');
+
+    # Second pass
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/fwd-zone-1', fqdn => 'example.com.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [{ id => 'dns/record/pit6-a', type => 'A' }],
+    });
+    mock_api::mock_response('PATCH', '/dns/record', {
+        result => { id => 'dns/record/pit6-a' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $dns_config, 'example.com', 'vm-pit6', '10.0.0.20', 0,
+        );
+    };
+    is($@, '', 'add_a_record second pass succeeds');
+    my $a2_calls = mock_api::get_all_calls();
+    my @a2_posts = grep { $_->{method} eq 'POST' } @$a2_calls;
+    my @a2_patches = grep { $_->{method} eq 'PATCH' } @$a2_calls;
+    is(scalar @a2_posts, 0, 'add_a_record second pass: zero POST calls');
+    is(scalar @a2_patches, 1, 'add_a_record second pass: used PATCH instead');
+
+    # --- add_ptr_record: first call POST, second call PATCH ---
+    # First pass
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev-zone', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', { results => [] });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/pit6-ptr' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $dns_config, '0.0.10.in-addr.arpa.', 'vm-pit6.example.com', '10.0.0.20', 0,
+        );
+    };
+    is($@, '', 'add_ptr_record first pass succeeds');
+    my $ptr1_calls = mock_api::get_all_calls();
+    my @ptr1_posts = grep { $_->{method} eq 'POST' } @$ptr1_calls;
+    is(scalar @ptr1_posts, 1, 'add_ptr_record first pass: used POST');
+
+    # Second pass
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev-zone', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [{ id => 'dns/record/pit6-ptr', type => 'PTR' }],
+    });
+    mock_api::mock_response('PATCH', '/dns/record', {
+        result => { id => 'dns/record/pit6-ptr' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $dns_config, '0.0.10.in-addr.arpa.', 'vm-pit6.example.com', '10.0.0.20', 0,
+        );
+    };
+    is($@, '', 'add_ptr_record second pass succeeds');
+    my $ptr2_calls = mock_api::get_all_calls();
+    my @ptr2_posts = grep { $_->{method} eq 'POST' } @$ptr2_calls;
+    my @ptr2_patches = grep { $_->{method} eq 'PATCH' } @$ptr2_calls;
+    is(scalar @ptr2_posts, 0, 'add_ptr_record second pass: zero POST calls');
+    is(scalar @ptr2_patches, 1, 'add_ptr_record second pass: used PATCH instead');
+};
+
 done_testing;

@@ -331,4 +331,163 @@ subtest 'on_update_hook with missing IP Space' => sub {
     like($@, qr/IP Space.*not found in Infoblox/, 'dies with IP Space not found message');
 };
 
+# -- add_next_freeip tests --
+
+subtest 'add_next_freeip allocates IP with correct metadata' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub1', address => '10.0.0.0/24' }],
+    });
+    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub1/nextavailableip', {
+        results => [{ address => '10.0.0.5', id => 'ipam/address/addr1' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr1', {
+        result => {},
+    });
+
+    my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+        $config, 'simple1-10.0.0.0-24', $subnet,
+        'vm-web', 'AA:BB:CC:DD:EE:FF', 100, 0,
+    );
+
+    is($ip, '10.0.0.5', 'returns allocated IP address');
+
+    # Verify the PATCH call has correct metadata
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    is(scalar @patch_calls, 1, 'exactly one PATCH call made');
+
+    my $patch_params = $patch_calls[0]->{params};
+    is($patch_params->{comment}, 'vm-web', 'comment is hostname');
+    is_deeply($patch_params->{names}, [{ name => 'vm-web', type => 'user' }],
+              'names contains hostname with type user');
+    is($patch_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
+    is($patch_params->{tags}->{vmid}, '100', 'tags has vmid as string');
+    is($patch_params->{hwaddr}, 'AA:BB:CC:DD:EE:FF', 'hwaddr is set when MAC provided');
+};
+
+subtest 'add_next_freeip without MAC omits hwaddr' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub1', address => '10.0.0.0/24' }],
+    });
+    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub1/nextavailableip', {
+        results => [{ address => '10.0.0.6', id => 'ipam/address/addr2' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr2', {
+        result => {},
+    });
+
+    my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+        $config, 'simple1-10.0.0.0-24', $subnet,
+        'vm-web', undef, 100, 0,
+    );
+
+    is($ip, '10.0.0.6', 'returns allocated IP address');
+
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    my $patch_params = $patch_calls[0]->{params};
+    ok(!exists $patch_params->{hwaddr}, 'hwaddr is NOT set when MAC is undef');
+};
+
+subtest 'add_next_freeip with noerr returns undef on failure' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            'vm-web', undef, 100, 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+    is($result, undef, 'returns undef with noerr=1');
+};
+
+subtest 'add_next_freeip dies on API error without noerr' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub1', address => '10.0.0.0/24' }],
+    });
+    mock_api::mock_error('POST', '/ipam/subnet/ipam/subnet/sub1/nextavailableip',
+        "no available IPs\n");
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            'vm-web', undef, 100, 0,
+        );
+    };
+    like($@, qr/can't find free ip in subnet 10\.0\.0\.0\/24/,
+         'dies with descriptive error including subnet CIDR');
+};
+
+# -- add_range_next_freeip tests --
+
+subtest 'add_range_next_freeip allocates from range' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/range', {
+        results => [{ id => 'ipam/range/r1' }],
+    });
+    mock_api::mock_response('POST', '/ipam/range/ipam/range/r1/nextavailableip', {
+        results => [{ address => '10.0.0.55', id => 'ipam/address/addr2' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr2', {
+        result => {},
+    });
+
+    my $range = { 'start-address' => '10.0.0.50', 'end-address' => '10.0.0.200' };
+    my $data = { hostname => 'vm-db', vmid => '101' };
+
+    my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_range_next_freeip(
+        $config, $subnet, $range, $data, 0,
+    );
+
+    is($ip, '10.0.0.55', 'returns allocated IP from range');
+
+    # Verify metadata on PATCH
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    is(scalar @patch_calls, 1, 'exactly one PATCH call');
+    my $patch_params = $patch_calls[0]->{params};
+    is($patch_params->{comment}, 'vm-db', 'comment is hostname from $data');
+    is($patch_params->{tags}->{vmid}, '101', 'vmid from $data');
+};
+
+subtest 'add_range_next_freeip dies when range not found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/range', {
+        results => [],
+    });
+
+    my $range = { 'start-address' => '10.0.0.50', 'end-address' => '10.0.0.200' };
+    my $data = { hostname => 'vm-db', vmid => '101' };
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_range_next_freeip(
+            $config, $subnet, $range, $data, 0,
+        );
+    };
+    like($@, qr/range.*not found/, 'dies with range not found message');
+};
+
 done_testing;

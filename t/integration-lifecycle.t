@@ -631,4 +631,222 @@ subtest 'lifecycle with /16 subnet: two-component name_in_zone' => sub {
        'name_in_zone is "10.5" (two components relative to /16 zone)');
 };
 
+# ============================================================================
+# Subtest 6: IPAM auth failure identifies the problem
+# ============================================================================
+
+subtest 'error messages: IPAM auth failure identifies the problem' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/ipam/ip_space', "401 Unauthorized\n");
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($ipam_config);
+    };
+    like($@, qr/Authentication failed/, 'identifies auth failure');
+    like($@, qr/invalid API token/, 'mentions token is invalid');
+};
+
+# ============================================================================
+# Subtest 7: IPAM connectivity failure identifies URL
+# ============================================================================
+
+subtest 'error messages: IPAM connectivity failure identifies URL' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/ipam/ip_space', "connection refused\n");
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($ipam_config);
+    };
+    like($@, qr/Cannot reach Infoblox API/, 'identifies connectivity issue');
+    like($@, qr/csp\.infoblox\.com/, 'includes the API URL');
+};
+
+# ============================================================================
+# Subtest 8: IPAM server error propagates context
+# ============================================================================
+
+subtest 'error messages: IPAM server error propagates context' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+    });
+    mock_api::mock_error('POST', 'nextavailableip', "500 Internal Server Error\n");
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+            $ipam_config, 'simple1-10.0.0.0-24', $subnet_24,
+            'vm-err-test', undef, 999, 0,
+        );
+    };
+    like($@, qr/can't find free ip/, 'wraps error with context');
+    like($@, qr/10\.0\.0\.0\/24/, 'includes subnet CIDR in error');
+};
+
+# ============================================================================
+# Subtest 9: DNS auth failure identifies the problem
+# ============================================================================
+
+subtest 'error messages: DNS auth failure identifies the problem' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/dns/view', "401 Unauthorized\n");
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($dns_config);
+    };
+    like($@, qr/Authentication failed/, 'identifies auth failure');
+    like($@, qr/invalid API token/, 'mentions token is invalid');
+};
+
+# ============================================================================
+# Subtest 10: DNS View not found is actionable
+# ============================================================================
+
+subtest 'error messages: DNS View not found is actionable' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', { results => [] });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($dns_config);
+    };
+    like($@, qr/DNS View/, 'mentions DNS View');
+    like($@, qr/not found/, 'says not found');
+    like($@, qr/TestView/, 'includes the view name that was searched for');
+};
+
+# ============================================================================
+# Subtest 11: Token leak prevention across all major error paths
+# ============================================================================
+
+subtest 'token leak prevention: API tokens never appear in error messages' => sub {
+    my $secret_token = 'SUPER-SECRET-TOKEN-abc123';
+
+    my $ipam_secret_config = {
+        url      => 'https://csp.infoblox.com',
+        token    => $secret_token,
+        ip_space => 'TestSpace',
+    };
+    my $dns_secret_config = {
+        url      => 'https://csp.infoblox.com',
+        token    => $secret_token,
+        dns_view => 'TestView',
+    };
+
+    # List of error scenarios to test for token leaks
+    my @scenarios = (
+        {
+            name  => 'IPAM on_update_hook auth error',
+            setup => sub {
+                mock_api::mock_error('GET', '/ipam/ip_space', "401 Unauthorized\n");
+            },
+            call => sub {
+                PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($ipam_secret_config);
+            },
+        },
+        {
+            name  => 'IPAM on_update_hook connectivity error',
+            setup => sub {
+                mock_api::mock_error('GET', '/ipam/ip_space', "connection refused\n");
+            },
+            call => sub {
+                PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($ipam_secret_config);
+            },
+        },
+        {
+            name  => 'IPAM on_update_hook IP Space not found',
+            setup => sub {
+                mock_api::mock_response('GET', '/ipam/ip_space', { results => [] });
+            },
+            call => sub {
+                PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($ipam_secret_config);
+            },
+        },
+        {
+            name  => 'DNS on_update_hook auth error',
+            setup => sub {
+                mock_api::mock_error('GET', '/dns/view', "401 Unauthorized\n");
+            },
+            call => sub {
+                PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($dns_secret_config);
+            },
+        },
+        {
+            name  => 'DNS on_update_hook connectivity error',
+            setup => sub {
+                mock_api::mock_error('GET', '/dns/view', "connection refused\n");
+            },
+            call => sub {
+                PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($dns_secret_config);
+            },
+        },
+        {
+            name  => 'DNS on_update_hook DNS View not found',
+            setup => sub {
+                mock_api::mock_response('GET', '/dns/view', { results => [] });
+            },
+            call => sub {
+                PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($dns_secret_config);
+            },
+        },
+        {
+            name  => 'IPAM add_next_freeip allocation failure',
+            setup => sub {
+                mock_api::mock_response('GET', '/ipam/ip_space', {
+                    results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+                });
+                mock_api::mock_response('GET', '/ipam/subnet', {
+                    results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+                });
+                mock_api::mock_error('POST', 'nextavailableip', "500 Internal Server Error\n");
+            },
+            call => sub {
+                PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
+                    $ipam_secret_config, 'simple1-10.0.0.0-24', $subnet_24,
+                    'vm-leak-test', undef, 999, 0,
+                );
+            },
+        },
+        {
+            name  => 'IPAM del_ip delete error',
+            setup => sub {
+                mock_api::mock_response('GET', '/ipam/ip_space', {
+                    results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+                });
+                mock_api::mock_response('GET', '/ipam/address', {
+                    results => [{ id => 'ipam/address/del-test', address => '10.0.0.99' }],
+                });
+                mock_api::mock_error('DELETE', '/ipam/address', "500 Internal Server Error\n");
+            },
+            call => sub {
+                PVE::Network::SDN::Ipams::InfobloxPlugin->del_ip(
+                    $ipam_secret_config, 'simple1-10.0.0.0-24', $subnet_24, '10.0.0.99', 0,
+                );
+            },
+        },
+        {
+            name  => 'DNS add_a_record zone not found',
+            setup => sub {
+                mock_api::mock_response('GET', '/dns/view', {
+                    results => [{ id => 'dns/view/view-1', name => 'TestView' }],
+                });
+                mock_api::mock_response('GET', '/dns/auth_zone', { results => [] });
+            },
+            call => sub {
+                PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+                    $dns_secret_config, 'example.com', 'vm-leak', '10.0.0.99', 0,
+                );
+            },
+        },
+    );
+
+    for my $scenario (@scenarios) {
+        mock_api::clear_mocks();
+        $scenario->{setup}->();
+        eval { $scenario->{call}->() };
+        unlike($@, qr/SUPER-SECRET-TOKEN/, "no token leak in $scenario->{name}");
+    }
+};
+
 done_testing;

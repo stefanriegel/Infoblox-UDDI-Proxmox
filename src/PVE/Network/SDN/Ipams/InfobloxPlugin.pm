@@ -377,7 +377,34 @@ sub add_range_next_freeip {
 
 sub get_ips_from_mac {
     my ($class, $plugin_config, $mac, $zone) = @_;
-    die "not yet implemented\n";
+
+    # Return format matches NetboxPlugin: {ip4 => {ip => 1}, ip6 => {}}
+    my $ip4 = {};
+    my $ip6 = {};
+
+    my $result = eval {
+        infoblox_api_request(
+            $plugin_config, "GET",
+            "/ipam/address?_filter=hwaddr==\"$mac\"",
+            undef,
+        );
+    };
+
+    if (!$@ && $result && $result->{results}) {
+        for my $addr (@{$result->{results}}) {
+            my $ip = $addr->{address};
+            next if !$ip;
+            if ($ip =~ /:/) {
+                # IPv6
+                $ip6->{$ip} = 1;
+            } else {
+                # IPv4
+                $ip4->{$ip} = 1;
+            }
+        }
+    }
+
+    return { ip4 => $ip4, ip6 => $ip6 };
 }
 
 sub on_update_hook {

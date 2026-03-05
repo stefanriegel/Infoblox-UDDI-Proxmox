@@ -176,7 +176,33 @@ sub get_ips_from_mac {
 
 sub on_update_hook {
     my ($class, $plugin_config) = @_;
-    die "not yet implemented\n";
+
+    # Step 1: API reachability + Step 2: Credential validity
+    # A single GET to /ipam/ip_space tests both reachability and auth.
+    # If the API is unreachable, we get a connection error.
+    # If credentials are bad, we get a 401/403.
+    my $result = eval {
+        infoblox_api_request(
+            $plugin_config, "GET",
+            "/ipam/ip_space?_filter=name==\"$plugin_config->{ip_space}\"",
+            undef,
+        );
+    };
+
+    if ($@) {
+        # Distinguish between connectivity and auth errors
+        if ($@ =~ /401|Unauthorized|403|Forbidden/i) {
+            die "Authentication failed: invalid API token\n";
+        }
+        die "Cannot reach Infoblox API at $plugin_config->{url}: $@\n";
+    }
+
+    # Step 3: IP Space existence
+    if (!$result || !$result->{results} || scalar(@{$result->{results}}) == 0) {
+        die "IP Space \"$plugin_config->{ip_space}\" not found in Infoblox\n";
+    }
+
+    return;
 }
 
 1;

@@ -338,6 +338,224 @@ subtest 'on_update_hook with missing DNS View' => sub {
     like($@, qr/DNS View.*not found in Infoblox/, 'dies with DNS View not found message');
 };
 
+# -- add_a_record tests --
+
+subtest 'add_a_record creates new A record' => sub {
+    mock_api::clear_mocks();
+    # Mock DNS View found
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # Mock auth zone found
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/zone-uuid-456', fqdn => 'example.com.' }],
+    });
+    # Mock find_dns_record_id: no existing record
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [],
+    });
+    # Mock POST success
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/new-a-uuid' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'add_a_record succeeds for new record');
+
+    # Find the POST call
+    my $calls = mock_api::get_all_calls();
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @post_calls, 1, 'exactly one POST call made');
+
+    my $post = $post_calls[0];
+    like($post->{url}, qr{/dns/record}, 'POST to /dns/record');
+    is($post->{params}->{type}, 'A', 'type is A');
+    is($post->{params}->{rdata}->{address}, '10.0.0.5', 'rdata.address is correct');
+    is($post->{params}->{name_in_zone}, 'webserver', 'name_in_zone is hostname');
+    is($post->{params}->{zone}, 'dns/auth_zone/zone-uuid-456', 'zone is auth_zone resource ID');
+    is($post->{params}->{view}, 'dns/view/view-uuid-123', 'view is DNS View resource ID');
+    is($post->{params}->{ttl}, 3600, 'ttl defaults to 3600');
+    is($post->{params}->{comment}, 'managed by proxmox', 'comment is set');
+    is($post->{params}->{tags}->{source}, 'proxmox', 'tags.source is proxmox');
+};
+
+subtest 'add_a_record updates existing record (idempotent)' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/zone-uuid-456', fqdn => 'example.com.' }],
+    });
+    # Existing record found
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [{ id => 'dns/record/existing-a-uuid', type => 'A' }],
+    });
+    # Mock PATCH success
+    mock_api::mock_response('PATCH', '/dns/record', {
+        result => { id => 'dns/record/existing-a-uuid' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'add_a_record succeeds for existing record');
+
+    # Verify PATCH was called (not POST)
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @patch_calls, 1, 'exactly one PATCH call made');
+    is(scalar @post_calls, 0, 'no POST call made');
+
+    my $patch = $patch_calls[0];
+    like($patch->{url}, qr{/dns/record/existing-a-uuid}, 'PATCH URL includes record ID');
+};
+
+subtest 'add_a_record uses custom ttl from config' => sub {
+    mock_api::clear_mocks();
+    my $config_ttl = { %$config, ttl => 7200 };
+
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/zone-uuid-456', fqdn => 'example.com.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [],
+    });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/new-a-uuid' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $config_ttl, 'example.com', 'webserver', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'add_a_record succeeds with custom TTL');
+
+    my $calls = mock_api::get_all_calls();
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is($post_calls[0]->{params}->{ttl}, 7200, 'ttl uses config value 7200');
+};
+
+subtest 'add_a_record with missing DNS View dies' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 0,
+        );
+    };
+    like($@, qr/DNS View.*not found/, 'dies with DNS View not found message');
+};
+
+subtest 'add_a_record with noerr=1 returns undef on error' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+};
+
+# -- del_a_record tests --
+
+subtest 'del_a_record deletes existing record' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # Existing record found
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [{ id => 'dns/record/a-rec-to-delete', type => 'A' }],
+    });
+    # Mock DELETE success
+    mock_api::mock_response('DELETE', '/dns/record', {});
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->del_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'del_a_record succeeds for existing record');
+
+    # Verify DELETE was called
+    my $calls = mock_api::get_all_calls();
+    my @del_calls = grep { $_->{method} eq 'DELETE' } @$calls;
+    is(scalar @del_calls, 1, 'exactly one DELETE call made');
+    like($del_calls[0]->{url}, qr{/dns/record/a-rec-to-delete}, 'DELETE URL includes record ID');
+};
+
+subtest 'del_a_record with record not found succeeds silently' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # No existing record
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->del_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'del_a_record succeeds silently when record not found');
+
+    # Verify no DELETE call
+    my $calls = mock_api::get_all_calls();
+    my @del_calls = grep { $_->{method} eq 'DELETE' } @$calls;
+    is(scalar @del_calls, 0, 'no DELETE call made');
+};
+
+subtest 'del_a_record with missing DNS View dies' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->del_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 0,
+        );
+    };
+    like($@, qr/DNS View.*not found/, 'dies with DNS View not found message');
+};
+
+subtest 'del_a_record with noerr=1 returns undef on error' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Dns::InfobloxPlugin->del_a_record(
+            $config, 'example.com', 'webserver', '10.0.0.5', 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+};
+
 # -- Coverage summary test --
 
 subtest 'coverage_summary - all methods exist' => sub {

@@ -70,10 +70,12 @@ sub get_ip_space_id {
 sub get_subnet_id {
     my ($config, $cidr, $space_id) = @_;
 
+    my ($address, $prefix) = split(/\//, $cidr);
+
     my $result = eval {
         infoblox_api_request(
             $config, "GET",
-            "/ipam/subnet?_filter=address==\"$cidr\" and space==\"$space_id\"",
+            "/ipam/subnet?_filter=address==\"$address\" and cidr==$prefix and space==\"$space_id\"",
             undef,
         );
     };

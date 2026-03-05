@@ -14,6 +14,13 @@ use mock_api;
 use_ok('PVE::Network::SDN::Ipams::InfobloxPlugin')
     or BAIL_OUT('Cannot load InfobloxPlugin');
 
+# Test config used across subtests
+my $config = {
+    url      => 'https://csp.infoblox.com',
+    token    => 'test-api-token-12345',
+    ip_space => 'TestSpace',
+};
+
 # -- Registration tests --
 
 subtest 'type returns infobloxuddi' => sub {
@@ -39,22 +46,106 @@ subtest 'options marks all required' => sub {
     }
 };
 
-# -- ID resolution helper tests (placeholders for Task 2) --
+# -- ID resolution helper tests --
 
-TODO: {
-    local $TODO = 'ID resolution helpers not yet implemented';
+subtest 'get_ip_space_id found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
 
-    subtest 'get_ip_space_id resolves name to id' => sub {
-        ok(0, 'get_ip_space_id placeholder');
-    };
+    my $id = PVE::Network::SDN::Ipams::InfobloxPlugin::get_ip_space_id($config, 'TestSpace');
+    is($id, 'ipam/ip_space/test-uuid-123', 'returns the IP Space id');
+};
 
-    subtest 'get_subnet_id resolves cidr to id' => sub {
-        ok(0, 'get_subnet_id placeholder');
-    };
+subtest 'get_ip_space_id not found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [],
+    });
 
-    subtest 'get_address_id resolves ip to id' => sub {
-        ok(0, 'get_address_id placeholder');
-    };
-}
+    my $id = PVE::Network::SDN::Ipams::InfobloxPlugin::get_ip_space_id($config, 'NonExistent');
+    is($id, undef, 'returns undef for non-existent IP Space');
+};
+
+subtest 'get_subnet_id found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/subnet-uuid-456', address => '10.0.0.0/24' }],
+    });
+
+    my $id = PVE::Network::SDN::Ipams::InfobloxPlugin::get_subnet_id(
+        $config, '10.0.0.0/24', 'ipam/ip_space/test-uuid-123',
+    );
+    is($id, 'ipam/subnet/subnet-uuid-456', 'returns the subnet id');
+};
+
+subtest 'get_subnet_id not found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [],
+    });
+
+    my $id = PVE::Network::SDN::Ipams::InfobloxPlugin::get_subnet_id(
+        $config, '10.99.99.0/24', 'ipam/ip_space/test-uuid-123',
+    );
+    is($id, undef, 'returns undef for non-existent subnet');
+};
+
+subtest 'get_address_id found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/addr-uuid-789', address => '10.0.0.5' }],
+    });
+
+    my $id = PVE::Network::SDN::Ipams::InfobloxPlugin::get_address_id(
+        $config, '10.0.0.5', 'ipam/ip_space/test-uuid-123',
+    );
+    is($id, 'ipam/address/addr-uuid-789', 'returns the address id');
+};
+
+subtest 'get_address_id not found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [],
+    });
+
+    my $id = PVE::Network::SDN::Ipams::InfobloxPlugin::get_address_id(
+        $config, '10.0.0.99', 'ipam/ip_space/test-uuid-123',
+    );
+    is($id, undef, 'returns undef for non-existent address');
+};
+
+subtest 'api_request_headers' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/hdr-test', name => 'TestSpace' }],
+    });
+
+    PVE::Network::SDN::Ipams::InfobloxPlugin::infoblox_api_request(
+        $config, 'GET', '/ipam/ip_space', undef,
+    );
+
+    my $call = mock_api::get_last_call();
+    ok(defined $call, 'api call was captured');
+    is($call->{method}, 'GET', 'method is GET');
+    like($call->{url}, qr{https://csp\.infoblox\.com/api/ddi/v1/ipam/ip_space},
+         'URL includes base URL and /api/ddi/v1 prefix');
+
+    # Headers are an arrayref: [key, val, key, val, ...]
+    my $headers = $call->{headers};
+    ok(ref $headers eq 'ARRAY', 'headers is an arrayref');
+
+    # Find Authorization header
+    my %header_map;
+    for (my $i = 0; $i < scalar(@$headers); $i += 2) {
+        $header_map{$headers->[$i]} = $headers->[$i + 1];
+    }
+
+    is($header_map{'Authorization'}, 'Token test-api-token-12345',
+       'Authorization header uses Token format');
+    is($header_map{'Content-Type'}, 'application/json; charset=UTF-8',
+       'Content-Type header is set correctly');
+};
 
 done_testing;

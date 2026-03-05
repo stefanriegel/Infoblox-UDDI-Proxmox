@@ -283,4 +283,52 @@ subtest 'update_subnet is a no-op' => sub {
     is(scalar(@$calls), 0, 'update_subnet makes no API calls');
 };
 
+# -- on_update_hook tests --
+
+subtest 'on_update_hook with valid config succeeds' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($config);
+    };
+    $err = $@;
+    is($err, '', 'on_update_hook succeeds with valid config');
+};
+
+subtest 'on_update_hook with unreachable API' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/ipam/ip_space', "connection refused\n");
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($config);
+    };
+    like($@, qr/Cannot reach Infoblox API at/, 'dies with unreachable API message');
+};
+
+subtest 'on_update_hook with invalid token' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/ipam/ip_space', "401 Unauthorized\n");
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($config);
+    };
+    like($@, qr/Authentication failed: invalid API token/, 'dies with auth failure message');
+};
+
+subtest 'on_update_hook with missing IP Space' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->on_update_hook($config);
+    };
+    like($@, qr/IP Space.*not found in Infoblox/, 'dies with IP Space not found message');
+};
+
 done_testing;

@@ -1,0 +1,80 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: shogo82148/actions-setup-perl@v1
+        with:
+          perl-version: '5.36'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libnet-ip-perl libnetaddr-ip-perl libjson-perl
+
+      - name: Run tests
+        run: prove -It/lib -Isrc -It t/
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - pve_version: "8"
+            debian_codename: "bookworm"
+          - pve_version: "9"
+            debian_codename: "trixie"
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Extract version from tag
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build .deb
+        run: |
+          PKG_NAME="pve-sdn-infoblox-uddi"
+          PKG_DIR="${PKG_NAME}_${VERSION}-1+pve${{ matrix.pve_version }}_all"
+
+          mkdir -p "$PKG_DIR/DEBIAN"
+          mkdir -p "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Ipams"
+          mkdir -p "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Dns"
+
+          cp src/PVE/Network/SDN/Ipams/InfobloxPlugin.pm \
+             "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Ipams/"
+          cp src/PVE/Network/SDN/Dns/InfobloxPlugin.pm \
+             "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Dns/"
+
+          sed "s/VERSION_PLACEHOLDER/${VERSION}-1+pve${{ matrix.pve_version }}/" \
+              debian/DEBIAN/control > "$PKG_DIR/DEBIAN/control"
+          cp debian/DEBIAN/postinst debian/DEBIAN/prerm debian/DEBIAN/triggers \
+             "$PKG_DIR/DEBIAN/"
+          chmod 0755 "$PKG_DIR/DEBIAN/postinst" "$PKG_DIR/DEBIAN/prerm"
+
+          dpkg-deb --build --root-owner-group "$PKG_DIR"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deb-pve${{ matrix.pve_version }}
+          path: '*.deb'
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: '**/*.deb'
+          generate_release_notes: true

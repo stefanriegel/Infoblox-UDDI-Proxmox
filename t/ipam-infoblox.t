@@ -490,4 +490,124 @@ subtest 'add_range_next_freeip dies when range not found' => sub {
     like($@, qr/range.*not found/, 'dies with range not found message');
 };
 
+# -- add_ip tests --
+
+subtest 'add_ip creates new address with correct metadata' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [],
+    });
+    mock_api::mock_response('POST', '/ipam/address', {
+        result => { id => 'ipam/address/new1', address => '10.0.0.5' },
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.5', 'vm-web', 'AA:BB:CC:DD:EE:FF', 100, 0, 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'add_ip succeeds for new address');
+
+    # Verify POST was called with correct params
+    my $calls = mock_api::get_all_calls();
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @post_calls, 1, 'exactly one POST call made');
+
+    my $post_params = $post_calls[0]->{params};
+    is($post_params->{address}, '10.0.0.5', 'address is bare IP (no CIDR)');
+    ok($post_params->{address} !~ /\//, 'address has no slash (bare IP, not CIDR)');
+    is($post_params->{space}, 'ipam/ip_space/test-uuid-123', 'space is set to space_id');
+    is($post_params->{comment}, 'vm-web', 'comment is hostname');
+    is_deeply($post_params->{names}, [{ name => 'vm-web', type => 'user' }],
+              'names contains hostname');
+    is($post_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
+    is($post_params->{tags}->{vmid}, '100', 'tags has vmid as string');
+    is($post_params->{hwaddr}, 'AA:BB:CC:DD:EE:FF', 'hwaddr is set');
+};
+
+subtest 'add_ip updates existing address (idempotent)' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/existing1', address => '10.0.0.5' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/existing1', {
+        result => { id => 'ipam/address/existing1' },
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.5', 'vm-web', 'AA:BB:CC:DD:EE:FF', 100, 0, 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'add_ip succeeds for existing address');
+
+    # Verify PATCH was called (not POST)
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @patch_calls, 1, 'exactly one PATCH call made');
+    is(scalar @post_calls, 0, 'no POST call made (idempotent update)');
+
+    my $patch_params = $patch_calls[0]->{params};
+    is($patch_params->{comment}, 'vm-web', 'PATCH has correct comment');
+};
+
+subtest 'add_ip with gateway sets comment to gateway and adds gateway tag' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [],
+    });
+    mock_api::mock_response('POST', '/ipam/address', {
+        result => { id => 'ipam/address/gw1', address => '10.0.0.1' },
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.1', 'vm-web', undef, undef, 1, 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'add_ip succeeds for gateway');
+
+    my $calls = mock_api::get_all_calls();
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    my $post_params = $post_calls[0]->{params};
+    is($post_params->{comment}, 'gateway', 'comment is "gateway" not hostname');
+    is($post_params->{tags}->{gateway}, 'true', 'tags has gateway=true');
+};
+
+subtest 'add_ip with noerr returns undef on failure' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Ipams::InfobloxPlugin->add_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.5', 'vm-web', undef, 100, 0, 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+    is($result, undef, 'returns undef with noerr=1');
+};
+
 done_testing;

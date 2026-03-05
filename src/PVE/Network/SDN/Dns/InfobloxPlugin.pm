@@ -149,7 +149,24 @@ sub del_ptr_record {
 
 sub verify_zone {
     my ($class, $plugin_config, $zone, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $view_name = $plugin_config->{dns_view} || 'default';
+
+    # Resolve DNS View ID
+    my $view_id = get_dns_view_id($plugin_config);
+    if (!$view_id) {
+        die "DNS View \"$view_name\" not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    # Resolve auth zone
+    my $zone_id = get_auth_zone_id($plugin_config, $zone, $view_id);
+    if (!$zone_id) {
+        die "zone $zone not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub get_reversedns_zone {
@@ -159,7 +176,32 @@ sub get_reversedns_zone {
 
 sub on_update_hook {
     my ($class, $plugin_config) = @_;
-    die "not yet implemented\n";
+
+    my $view_name = $plugin_config->{dns_view} || 'default';
+
+    # Single GET to /dns/view tests reachability + auth + DNS View existence (3-in-1)
+    my $result = eval {
+        infoblox_api_request(
+            $plugin_config, "GET",
+            "/dns/view?_filter=name==\"$view_name\"",
+            undef,
+        );
+    };
+
+    if ($@) {
+        # Distinguish between connectivity and auth errors
+        if ($@ =~ /401|Unauthorized|403|Forbidden/i) {
+            die "Authentication failed: invalid API token\n";
+        }
+        die "Cannot reach Infoblox API at $plugin_config->{url}: $@\n";
+    }
+
+    # DNS View existence
+    if (!$result || !$result->{results} || scalar(@{$result->{results}}) == 0) {
+        die "DNS View \"$view_name\" not found in Infoblox\n";
+    }
+
+    return;
 }
 
 1;

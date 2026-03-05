@@ -16,10 +16,6 @@ sub type {
 
 sub properties {
     return {
-        url => {
-            type => 'string',
-            description => 'Infoblox Universal DDI API URL (e.g., https://csp.infoblox.com)',
-        },
         token => {
             type => 'string',
             description => 'Infoblox API token',
@@ -27,10 +23,6 @@ sub properties {
         dns_view => {
             type => 'string',
             description => 'Infoblox DNS View name (default: "default")',
-        },
-        ttl => {
-            type => 'integer',
-            description => 'DNS record TTL in seconds (default: 3600)',
         },
     };
 }

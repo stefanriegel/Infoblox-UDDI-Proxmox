@@ -15,14 +15,6 @@ sub type {
 
 sub properties {
     return {
-        url => {
-            type => 'string',
-            description => 'Infoblox Universal DDI API URL (e.g., https://csp.infoblox.com)',
-        },
-        token => {
-            type => 'string',
-            description => 'Infoblox API token',
-        },
         ip_space => {
             type => 'string',
             description => 'Infoblox IP Space name',

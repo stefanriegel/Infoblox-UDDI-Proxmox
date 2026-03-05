@@ -31,10 +31,11 @@ subtest 'type returns infobloxuddi' => sub {
 subtest 'properties has required fields' => sub {
     my $props = PVE::Network::SDN::Ipams::InfobloxPlugin->properties();
     ok(ref $props eq 'HASH', 'properties() returns a hashref');
-    for my $field (qw(url token ip_space)) {
-        ok(exists $props->{$field}, "properties has '$field' field");
-        is($props->{$field}->{type}, 'string', "'$field' has type => string");
-    }
+    # Only ip_space is defined here; url and token are inherited from sibling plugins
+    ok(exists $props->{ip_space}, "properties has 'ip_space' field");
+    is($props->{ip_space}->{type}, 'string', "'ip_space' has type => string");
+    ok(!exists $props->{url}, "properties does not redefine 'url' (inherited)");
+    ok(!exists $props->{token}, "properties does not redefine 'token' (inherited)");
 };
 
 subtest 'options marks all required' => sub {

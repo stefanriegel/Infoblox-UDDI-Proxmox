@@ -31,14 +31,13 @@ subtest 'type returns infobloxuddi' => sub {
 subtest 'properties has required fields' => sub {
     my $props = PVE::Network::SDN::Dns::InfobloxPlugin->properties();
     ok(ref $props eq 'HASH', 'properties() returns a hashref');
-    for my $field (qw(url token)) {
-        ok(exists $props->{$field}, "properties has '$field' field");
-        is($props->{$field}->{type}, 'string', "'$field' has type => string");
-    }
+    # Only token and dns_view are defined here; url and ttl are inherited
+    ok(exists $props->{token}, "properties has 'token' field");
+    is($props->{token}->{type}, 'string', "'token' has type => string");
     ok(exists $props->{dns_view}, "properties has 'dns_view' field");
     is($props->{dns_view}->{type}, 'string', "'dns_view' has type => string");
-    ok(exists $props->{ttl}, "properties has 'ttl' field");
-    is($props->{ttl}->{type}, 'integer', "'ttl' has type => integer");
+    ok(!exists $props->{url}, "properties does not redefine 'url' (inherited)");
+    ok(!exists $props->{ttl}, "properties does not redefine 'ttl' (inherited)");
 };
 
 subtest 'options marks url/token required and dns_view/ttl optional' => sub {

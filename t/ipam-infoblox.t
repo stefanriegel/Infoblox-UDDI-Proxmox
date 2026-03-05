@@ -610,4 +610,202 @@ subtest 'add_ip with noerr returns undef on failure' => sub {
     is($result, undef, 'returns undef with noerr=1');
 };
 
+# -- del_ip tests --
+
+subtest 'del_ip with existing address deletes by ID' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
+    });
+    mock_api::mock_response('DELETE', '/ipam/address/ipam/address/addr1', undef);
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->del_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet, '10.0.0.5', 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'del_ip succeeds for existing address');
+
+    # Verify DELETE was called with correct path
+    my $calls = mock_api::get_all_calls();
+    my @delete_calls = grep { $_->{method} eq 'DELETE' } @$calls;
+    is(scalar @delete_calls, 1, 'exactly one DELETE call made');
+    like($delete_calls[0]->{url}, qr{/ipam/address/ipam/address/addr1},
+         'DELETE uses correct address ID path');
+};
+
+subtest 'del_ip with address not found succeeds silently (idempotent)' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [],
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->del_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet, '10.0.0.99', 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'del_ip succeeds when address not found');
+
+    # Verify no DELETE call was made
+    my $calls = mock_api::get_all_calls();
+    my @delete_calls = grep { $_->{method} eq 'DELETE' } @$calls;
+    is(scalar @delete_calls, 0, 'no DELETE call made when address not found');
+};
+
+subtest 'del_ip with noerr=1 returns undef on API error' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
+    });
+    mock_api::mock_error('DELETE', '/ipam/address/ipam/address/addr1',
+        "internal server error\n");
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Ipams::InfobloxPlugin->del_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet, '10.0.0.5', 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+    is($result, undef, 'returns undef with noerr=1');
+};
+
+subtest 'del_ip dies on API error without noerr' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
+    });
+    mock_api::mock_error('DELETE', '/ipam/address/ipam/address/addr1',
+        "internal server error\n");
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->del_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet, '10.0.0.5', 0,
+        );
+    };
+    like($@, qr/error deleting IP 10\.0\.0\.5/, 'dies with descriptive error message');
+};
+
+# -- update_ip tests --
+
+subtest 'update_ip patches metadata on existing address' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr1', {
+        result => { id => 'ipam/address/addr1' },
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->update_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.5', 'vm-web-new', 'FF:FF:FF:FF:FF:FF', 100, 0, 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'update_ip succeeds for existing address');
+
+    # Verify PATCH was called with correct metadata
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    is(scalar @patch_calls, 1, 'exactly one PATCH call made');
+
+    my $patch_params = $patch_calls[0]->{params};
+    is($patch_params->{comment}, 'vm-web-new', 'comment is updated hostname');
+    is_deeply($patch_params->{names}, [{ name => 'vm-web-new', type => 'user' }],
+              'names updated with new hostname');
+    is($patch_params->{hwaddr}, 'FF:FF:FF:FF:FF:FF', 'hwaddr updated');
+    is($patch_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
+    is($patch_params->{tags}->{vmid}, '100', 'tags has vmid as string');
+};
+
+subtest 'update_ip with is_gateway sets comment to gateway and gateway tag' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [{ id => 'ipam/address/gw1', address => '10.0.0.1' }],
+    });
+    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/gw1', {
+        result => { id => 'ipam/address/gw1' },
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->update_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.1', 'vm-web', undef, undef, 1, 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'update_ip succeeds for gateway');
+
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    my $patch_params = $patch_calls[0]->{params};
+    is($patch_params->{comment}, 'gateway', 'comment is "gateway" not hostname');
+    is($patch_params->{tags}->{gateway}, 'true', 'tags has gateway=true');
+};
+
+subtest 'update_ip with address not found dies' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->update_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.5', 'vm-web', undef, 100, 0, 0,
+        );
+    };
+    like($@, qr/address.*not found/, 'dies with address not found message');
+};
+
+subtest 'update_ip with noerr=1 returns undef on error' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Ipams::InfobloxPlugin->update_ip(
+            $config, 'simple1-10.0.0.0-24', $subnet,
+            '10.0.0.5', 'vm-web', undef, 100, 0, 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+    is($result, undef, 'returns undef with noerr=1');
+};
+
 done_testing;

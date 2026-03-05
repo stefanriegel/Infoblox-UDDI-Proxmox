@@ -20,6 +20,12 @@ IPAM_REG="PVE::Network::SDN::Ipams::InfobloxPlugin->register();"
 DNS_USE="use PVE::Network::SDN::Dns::InfobloxPlugin;"
 DNS_REG="PVE::Network::SDN::Dns::InfobloxPlugin->register();"
 
+JS_SRC="$SCRIPT_DIR/src/js/infobloxuddi-sdn.js"
+JS_DST="/usr/share/javascript/pve-sdn-infoblox-uddi/infobloxuddi-sdn.js"
+JS_LINK="/usr/share/pve-manager/js/infobloxuddi-sdn.js"
+INDEX_TPL="/usr/share/pve-manager/index.html.tpl"
+JS_SCRIPT_TAG='<script type="text/javascript" src="/pve2/js/infobloxuddi-sdn.js"></script>'
+
 # ── Helper Functions ─────────────────────────────────────────────────────────
 
 check_prereqs() {
@@ -79,6 +85,15 @@ if [ "$1" = "--remove" ]; then
     [ -f "$IPAM_PLUGIN_DST" ] && rm -f "$IPAM_PLUGIN_DST"
     [ -f "$DNS_PLUGIN_DST" ] && rm -f "$DNS_PLUGIN_DST"
 
+    # Remove JS symlink and file
+    [ -L "$JS_LINK" ] && rm -f "$JS_LINK"
+    [ -f "$JS_DST" ] && rm -f "$JS_DST"
+
+    # Remove script tag from index.html.tpl
+    if [ -f "$INDEX_TPL" ] && grep -qF "infobloxuddi-sdn.js" "$INDEX_TPL"; then
+        grep -vF "infobloxuddi-sdn.js" "$INDEX_TPL" > "${INDEX_TPL}.tmp" && mv "${INDEX_TPL}.tmp" "$INDEX_TPL"
+    fi
+
     echo "Infoblox UDDI plugins removed successfully."
 else
     # ── Install flow ─────────────────────────────────────────────────────
@@ -93,6 +108,16 @@ else
     # Copy plugin files
     cp "$IPAM_PLUGIN_SRC" "$IPAM_PLUGIN_DST"
     cp "$DNS_PLUGIN_SRC" "$DNS_PLUGIN_DST"
+
+    # Copy JS file and create symlink
+    mkdir -p "$(dirname "$JS_DST")"
+    cp "$JS_SRC" "$JS_DST"
+    ln -sf "$JS_DST" "$JS_LINK"
+
+    # Patch index.html.tpl to load our JS
+    if [ -f "$INDEX_TPL" ] && ! grep -qF "infobloxuddi-sdn.js" "$INDEX_TPL"; then
+        sed -i '/pvemanagerlib\.js/a\    '"$JS_SCRIPT_TAG" "$INDEX_TPL"
+    fi
 
     # Back up loader files before patching (only if backup does not exist)
     [ ! -f "${IPAM_LOADER}.bak" ] && cp "$IPAM_LOADER" "${IPAM_LOADER}.bak"

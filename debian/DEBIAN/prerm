@@ -11,6 +11,9 @@ IPAM_REG="PVE::Network::SDN::Ipams::InfobloxPlugin->register();"
 DNS_USE="use PVE::Network::SDN::Dns::InfobloxPlugin;"
 DNS_REG="PVE::Network::SDN::Dns::InfobloxPlugin->register();"
 
+JS_LINK="/usr/share/pve-manager/js/infobloxuddi-sdn.js"
+INDEX_TPL="/usr/share/pve-manager/index.html.tpl"
+
 # ── Functions ────────────────────────────────────────────────────────────────
 
 unpatch_loader() {
@@ -28,13 +31,24 @@ unpatch_loader() {
     fi
 }
 
+remove_js() {
+    # Remove symlink
+    [ -L "$JS_LINK" ] && rm -f "$JS_LINK"
+
+    # Remove script tag from index.html.tpl
+    if [ -f "$INDEX_TPL" ] && grep -qF "infobloxuddi-sdn.js" "$INDEX_TPL"; then
+        grep -vF "infobloxuddi-sdn.js" "$INDEX_TPL" > "${INDEX_TPL}.tmp" && mv "${INDEX_TPL}.tmp" "$INDEX_TPL"
+    fi
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 case "$1" in
     remove|deconfigure)
         unpatch_loader "$IPAM_LOADER" "$IPAM_USE" "$IPAM_REG"
         unpatch_loader "$DNS_LOADER" "$DNS_USE" "$DNS_REG"
-        logger -t pve-sdn-infoblox-uddi "Removed SDN loader patches ($1)"
+        remove_js
+        logger -t pve-sdn-infoblox-uddi "Removed SDN loader patches and JS symlink ($1)"
         ;;
     upgrade|failed-upgrade)
         # Do NOT unpatch on upgrade -- postinst will re-patch after upgrade

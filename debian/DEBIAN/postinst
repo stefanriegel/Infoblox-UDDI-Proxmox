@@ -11,6 +11,11 @@ IPAM_REG="PVE::Network::SDN::Ipams::InfobloxPlugin->register();"
 DNS_USE="use PVE::Network::SDN::Dns::InfobloxPlugin;"
 DNS_REG="PVE::Network::SDN::Dns::InfobloxPlugin->register();"
 
+JS_SRC="/usr/share/javascript/pve-sdn-infoblox-uddi/infobloxuddi-sdn.js"
+JS_LINK="/usr/share/pve-manager/js/infobloxuddi-sdn.js"
+INDEX_TPL="/usr/share/pve-manager/index.html.tpl"
+JS_SCRIPT_TAG='<script type="text/javascript" src="/pve2/js/infobloxuddi-sdn.js"></script>'
+
 # ── Functions ────────────────────────────────────────────────────────────────
 
 patch_loader() {
@@ -29,13 +34,26 @@ patch_loader() {
     fi
 }
 
+install_js() {
+    # Create symlink for JS file
+    if [ -f "$JS_SRC" ]; then
+        ln -sf "$JS_SRC" "$JS_LINK"
+    fi
+
+    # Patch index.html.tpl to load our JS after pvemanagerlib.js
+    if [ -f "$INDEX_TPL" ] && ! grep -qF "infobloxuddi-sdn.js" "$INDEX_TPL"; then
+        sed -i '/pvemanagerlib\.js/a\    '"$JS_SCRIPT_TAG" "$INDEX_TPL"
+    fi
+}
+
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 case "$1" in
     configure|triggered)
         patch_loader "$IPAM_LOADER" "$IPAM_USE" "$IPAM_REG" "Ipams::Plugin->init"
         patch_loader "$DNS_LOADER" "$DNS_USE" "$DNS_REG" "Dns::Plugin->init"
-        logger -t pve-sdn-infoblox-uddi "Patched SDN loader files ($1)"
+        install_js
+        logger -t pve-sdn-infoblox-uddi "Patched SDN loader files and JS symlink ($1)"
         ;;
     abort-upgrade|abort-remove|abort-deconfigure)
         ;;

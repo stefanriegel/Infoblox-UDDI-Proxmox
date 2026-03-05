@@ -556,6 +556,259 @@ subtest 'del_a_record with noerr=1 returns undef on error' => sub {
     is($@, '', 'does not die with noerr=1');
 };
 
+# -- get_reversedns_zone tests --
+
+subtest 'get_reversedns_zone finds /24 reverse zone' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # /24 zone exists
+    mock_api::mock_response('GET', 'fqdn=="0.0.10.in-addr.arpa."', {
+        results => [{ id => 'dns/auth_zone/rev24-uuid', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+
+    my $zone = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $config, 'simple1-10.0.0.0-24', { cidr => '10.0.0.0/24', mask => 24 }, '10.0.0.5',
+    );
+    is($zone, '0.0.10.in-addr.arpa.', 'returns /24 reverse zone');
+};
+
+subtest 'get_reversedns_zone walks up to /16 zone' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # /24 zone does NOT exist
+    mock_api::mock_response('GET', 'fqdn=="0.0.10.in-addr.arpa."', {
+        results => [],
+    });
+    # /16 zone exists
+    mock_api::mock_response('GET', 'fqdn=="0.10.in-addr.arpa."', {
+        results => [{ id => 'dns/auth_zone/rev16-uuid', fqdn => '0.10.in-addr.arpa.' }],
+    });
+
+    my $zone = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $config, 'simple1-10.0.0.0-24', { cidr => '10.0.0.0/24', mask => 24 }, '10.0.0.5',
+    );
+    is($zone, '0.10.in-addr.arpa.', 'returns /16 reverse zone when /24 not found');
+};
+
+subtest 'get_reversedns_zone returns empty when no zone found' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # No reverse zones exist -- mock auth_zone to return empty for any query
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [],
+    });
+
+    my $zone = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $config, 'simple1-10.0.0.0-24', { cidr => '10.0.0.0/24', mask => 24 }, '10.0.0.5',
+    );
+    is($zone, '', 'returns empty string when no reverse zone found');
+};
+
+subtest 'get_reversedns_zone with DNS View not found returns empty' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    my $zone = PVE::Network::SDN::Dns::InfobloxPlugin->get_reversedns_zone(
+        $config, 'simple1-10.0.0.0-24', { cidr => '10.0.0.0/24', mask => 24 }, '10.0.0.5',
+    );
+    is($zone, '', 'returns empty string when DNS View not found');
+};
+
+# -- add_ptr_record tests --
+
+subtest 'add_ptr_record creates new PTR record' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # Mock reverse zone auth_zone found
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev-zone-uuid', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+    # No existing PTR record
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [],
+    });
+    # Mock POST success
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/new-ptr-uuid' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $config, '0.0.10.in-addr.arpa.', 'webserver.example.com', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'add_ptr_record succeeds for new record');
+
+    # Find the POST call
+    my $calls = mock_api::get_all_calls();
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @post_calls, 1, 'exactly one POST call made');
+
+    my $post = $post_calls[0];
+    like($post->{url}, qr{/dns/record}, 'POST to /dns/record');
+    is($post->{params}->{type}, 'PTR', 'type is PTR');
+    is($post->{params}->{rdata}->{dname}, 'webserver.example.com.',
+       'rdata.dname has trailing dot');
+    is($post->{params}->{name_in_zone}, '5', 'name_in_zone is host part relative to zone');
+    is($post->{params}->{zone}, 'dns/auth_zone/rev-zone-uuid', 'zone is reverse zone resource ID');
+    is($post->{params}->{view}, 'dns/view/view-uuid-123', 'view is DNS View resource ID');
+    is($post->{params}->{ttl}, 3600, 'ttl defaults to 3600');
+    is($post->{params}->{comment}, 'managed by proxmox', 'comment is set');
+    is($post->{params}->{tags}->{source}, 'proxmox', 'tags.source is proxmox');
+};
+
+subtest 'add_ptr_record updates existing (idempotent)' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev-zone-uuid', fqdn => '0.0.10.in-addr.arpa.' }],
+    });
+    # Existing PTR record found
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [{ id => 'dns/record/existing-ptr-uuid', type => 'PTR' }],
+    });
+    # Mock PATCH success
+    mock_api::mock_response('PATCH', '/dns/record', {
+        result => { id => 'dns/record/existing-ptr-uuid' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $config, '0.0.10.in-addr.arpa.', 'webserver.example.com', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'add_ptr_record succeeds for existing record');
+
+    # Verify PATCH was called (not POST)
+    my $calls = mock_api::get_all_calls();
+    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @patch_calls, 1, 'exactly one PATCH call made');
+    is(scalar @post_calls, 0, 'no POST call made');
+};
+
+subtest 'add_ptr_record with noerr=1 returns undef on error' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $config, '0.0.10.in-addr.arpa.', 'webserver.example.com', '10.0.0.5', 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+};
+
+subtest 'add_ptr_record name_in_zone handles non-/24 zones' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # /16 reverse zone
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/rev16-zone-uuid', fqdn => '0.10.in-addr.arpa.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [],
+    });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/new-ptr-uuid-16' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_ptr_record(
+            $config, '0.10.in-addr.arpa.', 'webserver.example.com', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'add_ptr_record succeeds for /16 zone');
+
+    my $calls = mock_api::get_all_calls();
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is($post_calls[0]->{params}->{name_in_zone}, '5.0',
+       'name_in_zone is "5.0" for /16 zone (two components relative to zone)');
+};
+
+# -- del_ptr_record tests --
+
+subtest 'del_ptr_record deletes existing PTR' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # Existing PTR record found
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [{ id => 'dns/record/ptr-to-delete', type => 'PTR' }],
+    });
+    # Mock DELETE success
+    mock_api::mock_response('DELETE', '/dns/record', {});
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->del_ptr_record(
+            $config, '0.0.10.in-addr.arpa.', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'del_ptr_record succeeds for existing record');
+
+    # Verify DELETE was called
+    my $calls = mock_api::get_all_calls();
+    my @del_calls = grep { $_->{method} eq 'DELETE' } @$calls;
+    is(scalar @del_calls, 1, 'exactly one DELETE call made');
+    like($del_calls[0]->{url}, qr{/dns/record/ptr-to-delete}, 'DELETE URL includes record ID');
+};
+
+subtest 'del_ptr_record with record not found succeeds silently' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    # No existing PTR record
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->del_ptr_record(
+            $config, '0.0.10.in-addr.arpa.', '10.0.0.5', 0,
+        );
+    };
+    is($@, '', 'del_ptr_record succeeds silently when record not found');
+
+    # Verify no DELETE call
+    my $calls = mock_api::get_all_calls();
+    my @del_calls = grep { $_->{method} eq 'DELETE' } @$calls;
+    is(scalar @del_calls, 0, 'no DELETE call made');
+};
+
+subtest 'del_ptr_record with noerr=1 returns undef on error' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Dns::InfobloxPlugin->del_ptr_record(
+            $config, '0.0.10.in-addr.arpa.', '10.0.0.5', 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+};
+
 # -- Coverage summary test --
 
 subtest 'coverage_summary - all methods exist' => sub {

@@ -191,7 +191,7 @@ sub add_ip {
             # Address exists -- update metadata (idempotent)
             infoblox_api_request(
                 $plugin_config, "PATCH",
-                "/ipam/address/$existing_id",
+                "/$existing_id",
                 $params,
             );
         } else {
@@ -233,7 +233,7 @@ sub update_ip {
 
         infoblox_api_request(
             $plugin_config, "PATCH",
-            "/ipam/address/$address_id",
+            "/$address_id",
             $params,
         );
     };
@@ -264,7 +264,7 @@ sub del_ip {
 
         infoblox_api_request(
             $plugin_config, "DELETE",
-            "/ipam/address/$address_id",
+            "/$address_id",
             undef,
         );
     };
@@ -294,20 +294,22 @@ sub add_next_freeip {
     }
 
     my $ip = eval {
+        # Get next available IP (read-only query, does not allocate)
         my $result = infoblox_api_request(
-            $plugin_config, "POST",
-            "/ipam/subnet/$infoblox_subnet_id/nextavailableip",
+            $plugin_config, "GET",
+            "/$infoblox_subnet_id/nextavailableip?count=1",
             undef,
         );
 
         my $address = $result->{results}->[0]->{address};
-        my $address_id = $result->{results}->[0]->{id};
 
-        # Set metadata on the allocated address
+        # Create the address reservation with metadata
         my $params = build_address_params($hostname, $mac, $vmid);
+        $params->{address} = $address;
+        $params->{space} = $space_id;
         infoblox_api_request(
-            $plugin_config, "PATCH",
-            "/ipam/address/$address_id",
+            $plugin_config, "POST",
+            "/ipam/address",
             $params,
         );
 
@@ -345,19 +347,22 @@ sub add_range_next_freeip {
     }
 
     my $ip = eval {
+        # Get next available IP from range (read-only query)
         my $result = infoblox_api_request(
-            $plugin_config, "POST",
-            "/ipam/range/$range_id/nextavailableip",
+            $plugin_config, "GET",
+            "/$range_id/nextavailableip?count=1",
             undef,
         );
 
         my $address = $result->{results}->[0]->{address};
-        my $address_id = $result->{results}->[0]->{id};
 
+        # Create the address reservation with metadata
         my $params = build_address_params($hostname, $mac, $vmid);
+        $params->{address} = $address;
+        $params->{space} = $space_id;
         infoblox_api_request(
-            $plugin_config, "PATCH",
-            "/ipam/address/$address_id",
+            $plugin_config, "POST",
+            "/ipam/address",
             $params,
         );
 

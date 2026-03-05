@@ -342,11 +342,11 @@ subtest 'add_next_freeip allocates IP with correct metadata' => sub {
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub1', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub1/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub1/nextavailableip', {
         results => [{ address => '10.0.0.5', id => 'ipam/address/addr1' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr1', {
-        result => {},
+    mock_api::mock_response('POST', '/ipam/address', {
+        result => { id => 'ipam/address/addr1' },
     });
 
     my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
@@ -356,18 +356,19 @@ subtest 'add_next_freeip allocates IP with correct metadata' => sub {
 
     is($ip, '10.0.0.5', 'returns allocated IP address');
 
-    # Verify the PATCH call has correct metadata
+    # Verify the POST /ipam/address call has correct metadata
     my $calls = mock_api::get_all_calls();
-    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
-    is(scalar @patch_calls, 1, 'exactly one PATCH call made');
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @post_calls, 1, 'exactly one POST call made');
 
-    my $patch_params = $patch_calls[0]->{params};
-    is($patch_params->{comment}, 'vm-web', 'comment is hostname');
-    is_deeply($patch_params->{names}, [{ name => 'vm-web', type => 'user' }],
+    my $post_params = $post_calls[0]->{params};
+    is($post_params->{address}, '10.0.0.5', 'address is set');
+    is($post_params->{comment}, 'vm-web', 'comment is hostname');
+    is_deeply($post_params->{names}, [{ name => 'vm-web', type => 'user' }],
               'names contains hostname with type user');
-    is($patch_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
-    is($patch_params->{tags}->{vmid}, '100', 'tags has vmid as string');
-    is($patch_params->{hwaddr}, 'AA:BB:CC:DD:EE:FF', 'hwaddr is set when MAC provided');
+    is($post_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
+    is($post_params->{tags}->{vmid}, '100', 'tags has vmid as string');
+    is($post_params->{hwaddr}, 'AA:BB:CC:DD:EE:FF', 'hwaddr is set when MAC provided');
 };
 
 subtest 'add_next_freeip without MAC omits hwaddr' => sub {
@@ -378,11 +379,11 @@ subtest 'add_next_freeip without MAC omits hwaddr' => sub {
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub1', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub1/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub1/nextavailableip', {
         results => [{ address => '10.0.0.6', id => 'ipam/address/addr2' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr2', {
-        result => {},
+    mock_api::mock_response('POST', '/ipam/address', {
+        result => { id => 'ipam/address/addr2' },
     });
 
     my $ip = PVE::Network::SDN::Ipams::InfobloxPlugin->add_next_freeip(
@@ -393,9 +394,9 @@ subtest 'add_next_freeip without MAC omits hwaddr' => sub {
     is($ip, '10.0.0.6', 'returns allocated IP address');
 
     my $calls = mock_api::get_all_calls();
-    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
-    my $patch_params = $patch_calls[0]->{params};
-    ok(!exists $patch_params->{hwaddr}, 'hwaddr is NOT set when MAC is undef');
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    my $post_params = $post_calls[0]->{params};
+    ok(!exists $post_params->{hwaddr}, 'hwaddr is NOT set when MAC is undef');
 };
 
 subtest 'add_next_freeip with noerr returns undef on failure' => sub {
@@ -423,7 +424,7 @@ subtest 'add_next_freeip dies on API error without noerr' => sub {
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub1', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_error('POST', '/ipam/subnet/ipam/subnet/sub1/nextavailableip',
+    mock_api::mock_error('GET', '/ipam/subnet/sub1/nextavailableip',
         "no available IPs\n");
 
     eval {
@@ -446,11 +447,11 @@ subtest 'add_range_next_freeip allocates from range' => sub {
     mock_api::mock_response('GET', '/ipam/range', {
         results => [{ id => 'ipam/range/r1' }],
     });
-    mock_api::mock_response('POST', '/ipam/range/ipam/range/r1/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/range/r1/nextavailableip', {
         results => [{ address => '10.0.0.55', id => 'ipam/address/addr2' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr2', {
-        result => {},
+    mock_api::mock_response('POST', '/ipam/address', {
+        result => { id => 'ipam/address/addr2' },
     });
 
     my $range = { 'start-address' => '10.0.0.50', 'end-address' => '10.0.0.200' };
@@ -462,13 +463,13 @@ subtest 'add_range_next_freeip allocates from range' => sub {
 
     is($ip, '10.0.0.55', 'returns allocated IP from range');
 
-    # Verify metadata on PATCH
+    # Verify metadata on POST /ipam/address
     my $calls = mock_api::get_all_calls();
-    my @patch_calls = grep { $_->{method} eq 'PATCH' } @$calls;
-    is(scalar @patch_calls, 1, 'exactly one PATCH call');
-    my $patch_params = $patch_calls[0]->{params};
-    is($patch_params->{comment}, 'vm-db', 'comment is hostname from $data');
-    is($patch_params->{tags}->{vmid}, '101', 'vmid from $data');
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is(scalar @post_calls, 1, 'exactly one POST call');
+    my $post_params = $post_calls[0]->{params};
+    is($post_params->{comment}, 'vm-db', 'comment is hostname from $data');
+    is($post_params->{tags}->{vmid}, '101', 'vmid from $data');
 };
 
 subtest 'add_range_next_freeip dies when range not found' => sub {
@@ -540,7 +541,7 @@ subtest 'add_ip updates existing address (idempotent)' => sub {
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/existing1', address => '10.0.0.5' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/existing1', {
+    mock_api::mock_response('PATCH', '/ipam/address/existing1', {
         result => { id => 'ipam/address/existing1' },
     });
 
@@ -621,7 +622,7 @@ subtest 'del_ip with existing address deletes by ID' => sub {
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
     });
-    mock_api::mock_response('DELETE', '/ipam/address/ipam/address/addr1', undef);
+    mock_api::mock_response('DELETE', '/ipam/address/addr1', undef);
 
     my $err;
     eval {
@@ -636,7 +637,7 @@ subtest 'del_ip with existing address deletes by ID' => sub {
     my $calls = mock_api::get_all_calls();
     my @delete_calls = grep { $_->{method} eq 'DELETE' } @$calls;
     is(scalar @delete_calls, 1, 'exactly one DELETE call made');
-    like($delete_calls[0]->{url}, qr{/ipam/address/ipam/address/addr1},
+    like($delete_calls[0]->{url}, qr{/ipam/address/addr1},
          'DELETE uses correct address ID path');
 };
 
@@ -672,7 +673,7 @@ subtest 'del_ip with noerr=1 returns undef on API error' => sub {
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
     });
-    mock_api::mock_error('DELETE', '/ipam/address/ipam/address/addr1',
+    mock_api::mock_error('DELETE', '/ipam/address/addr1',
         "internal server error\n");
 
     my $result;
@@ -693,7 +694,7 @@ subtest 'del_ip dies on API error without noerr' => sub {
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
     });
-    mock_api::mock_error('DELETE', '/ipam/address/ipam/address/addr1',
+    mock_api::mock_error('DELETE', '/ipam/address/addr1',
         "internal server error\n");
 
     eval {
@@ -714,7 +715,7 @@ subtest 'update_ip patches metadata on existing address' => sub {
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/addr1', address => '10.0.0.5' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/addr1', {
+    mock_api::mock_response('PATCH', '/ipam/address/addr1', {
         result => { id => 'ipam/address/addr1' },
     });
 
@@ -750,7 +751,7 @@ subtest 'update_ip with is_gateway sets comment to gateway and gateway tag' => s
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/gw1', address => '10.0.0.1' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/gw1', {
+    mock_api::mock_response('PATCH', '/ipam/address/gw1', {
         result => { id => 'ipam/address/gw1' },
     });
 

@@ -107,10 +107,10 @@ subtest 'VM lifecycle: gateway reservation + allocate IP + A record + PTR record
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-24/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub-24/nextavailableip', {
         results => [{ address => '10.0.0.5', id => 'ipam/address/vm1-addr' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/vm1-addr', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -200,7 +200,7 @@ subtest 'VM lifecycle: gateway reservation + allocate IP + A record + PTR record
     mock_api::mock_response('GET', '/dns/record', {
         results => [{ id => 'dns/record/ptr-rec-1', type => 'PTR' }],
     });
-    mock_api::mock_response('DELETE', '/dns/record/dns/record/ptr-rec-1', {});
+    mock_api::mock_response('DELETE', '/dns/record/ptr-rec-1', {});
 
     eval {
         PVE::Network::SDN::Dns::InfobloxPlugin->del_ptr_record(
@@ -221,7 +221,7 @@ subtest 'VM lifecycle: gateway reservation + allocate IP + A record + PTR record
     mock_api::mock_response('GET', '/dns/record', {
         results => [{ id => 'dns/record/a-rec-1', type => 'A' }],
     });
-    mock_api::mock_response('DELETE', '/dns/record/dns/record/a-rec-1', {});
+    mock_api::mock_response('DELETE', '/dns/record/a-rec-1', {});
 
     eval {
         PVE::Network::SDN::Dns::InfobloxPlugin->del_a_record(
@@ -242,7 +242,7 @@ subtest 'VM lifecycle: gateway reservation + allocate IP + A record + PTR record
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/vm1-addr', address => '10.0.0.5' }],
     });
-    mock_api::mock_response('DELETE', '/ipam/address/ipam/address/vm1-addr', undef);
+    mock_api::mock_response('DELETE', '/ipam/address/vm1-addr', undef);
 
     eval {
         PVE::Network::SDN::Ipams::InfobloxPlugin->del_ip(
@@ -270,10 +270,10 @@ subtest 'multi-VM: create VM1, create VM2, delete VM1, verify VM2 unaffected' =>
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-24/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub-24/nextavailableip', {
         results => [{ address => '10.0.0.5', id => 'ipam/address/vm1-addr' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/vm1-addr', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -291,10 +291,10 @@ subtest 'multi-VM: create VM1, create VM2, delete VM1, verify VM2 unaffected' =>
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-24/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub-24/nextavailableip', {
         results => [{ address => '10.0.0.6', id => 'ipam/address/vm2-addr' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/vm2-addr', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -312,7 +312,7 @@ subtest 'multi-VM: create VM1, create VM2, delete VM1, verify VM2 unaffected' =>
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/vm1-addr', address => '10.0.0.5' }],
     });
-    mock_api::mock_response('DELETE', '/ipam/address/ipam/address/vm1-addr', undef);
+    mock_api::mock_response('DELETE', '/ipam/address/vm1-addr', undef);
 
     eval {
         PVE::Network::SDN::Ipams::InfobloxPlugin->del_ip(
@@ -439,7 +439,7 @@ subtest 'repeated pvesh apply: second pass uses PATCH not POST for existing reso
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/ip-existing', address => '10.0.0.5' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/ip-existing', {
+    mock_api::mock_response('PATCH', '/ipam/address/ip-existing', {
         result => { id => 'ipam/address/ip-existing' },
     });
 
@@ -500,10 +500,10 @@ subtest 'lifecycle with /22 subnet: correct reverse zone for IP in non-base /24'
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub-22', address => '10.1.0.0/22' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-22/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub-22/nextavailableip', {
         results => [{ address => '10.1.2.50', id => 'ipam/address/vm-22-addr' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/vm-22-addr', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -570,10 +570,10 @@ subtest 'lifecycle with /16 subnet: two-component name_in_zone' => sub {
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub-16', address => '172.16.0.0/16' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-16/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub-16/nextavailableip', {
         results => [{ address => '172.16.5.10', id => 'ipam/address/vm-16-addr' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/vm-16-addr', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -861,10 +861,10 @@ subtest 'PITFALL 1: eval return bug - add_next_freeip returns IP not undef' => s
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-24/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub-24/nextavailableip', {
         results => [{ address => '10.0.0.42', id => 'ipam/address/eval-test' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/eval-test', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -889,10 +889,10 @@ subtest 'PITFALL 1b: eval return bug - add_range_next_freeip returns IP not unde
     mock_api::mock_response('GET', '/ipam/range', {
         results => [{ id => 'ipam/range/range-1', start => '10.0.0.50', end => '10.0.0.100' }],
     });
-    mock_api::mock_response('POST', '/ipam/range/ipam/range/range-1/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/range/range-1/nextavailableip', {
         results => [{ address => '10.0.0.55', id => 'ipam/address/eval-range-test' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/eval-range-test', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -949,10 +949,10 @@ subtest 'PITFALL 2: CIDR format - address param never contains slash' => sub {
     mock_api::mock_response('GET', '/ipam/subnet', {
         results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
     });
-    mock_api::mock_response('POST', '/ipam/subnet/ipam/subnet/sub-24/nextavailableip', {
+    mock_api::mock_response('GET', '/ipam/subnet/sub-24/nextavailableip', {
         results => [{ address => '10.0.0.7', id => 'ipam/address/cidr-alloc-test' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/cidr-alloc-test', {
+    mock_api::mock_response('POST', '/ipam/address', {
         result => {},
     });
 
@@ -1211,7 +1211,7 @@ subtest 'PITFALL 6: non-idempotent creates - repeated add uses PATCH not POST' =
     mock_api::mock_response('GET', '/ipam/address', {
         results => [{ id => 'ipam/address/pit6-ip', address => '10.0.0.20' }],
     });
-    mock_api::mock_response('PATCH', '/ipam/address/ipam/address/pit6-ip', {
+    mock_api::mock_response('PATCH', '/ipam/address/pit6-ip', {
         result => { id => 'ipam/address/pit6-ip' },
     });
 

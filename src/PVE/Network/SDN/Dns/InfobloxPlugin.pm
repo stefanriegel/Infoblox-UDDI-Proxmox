@@ -158,7 +158,7 @@ sub add_a_record {
         if ($existing_id) {
             # Record exists -- update via PATCH
             infoblox_api_request($plugin_config, "PATCH",
-                "/dns/record/$existing_id", $params);
+                "/$existing_id", $params);
         } else {
             # Create new record via POST
             $params->{name_in_zone} = $hostname;
@@ -225,7 +225,7 @@ sub add_ptr_record {
         if ($existing_id) {
             # Record exists -- update via PATCH
             infoblox_api_request($plugin_config, "PATCH",
-                "/dns/record/$existing_id", $params);
+                "/$existing_id", $params);
         } else {
             # Create new record via POST
             $params->{name_in_zone} = $name_in_zone;
@@ -264,7 +264,7 @@ sub del_a_record {
         if ($record_id) {
             # Record found -- delete it
             infoblox_api_request($plugin_config, "DELETE",
-                "/dns/record/$record_id", undef);
+                "/$record_id", undef);
         }
         # If not found, return silently (idempotent delete)
     };
@@ -299,7 +299,7 @@ sub del_ptr_record {
         if ($record_id) {
             # Record found -- delete it
             infoblox_api_request($plugin_config, "DELETE",
-                "/dns/record/$record_id", undef);
+                "/$record_id", undef);
         }
         # If not found, return silently (idempotent delete)
     };

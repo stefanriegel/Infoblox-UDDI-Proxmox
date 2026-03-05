@@ -27,9 +27,9 @@ The script checks prerequisites, copies plugin files, patches Proxmox SDN loader
 
 ### Option B: Debian Package
 
+Download the `.deb` for your PVE version from the [latest release](https://github.com/stefanriegel/Infoblox-UDDI-Proxmox/releases/latest), then install:
+
 ```bash
-# Download the latest release for your PVE version
-wget https://github.com/stefanriegel/Infoblox-UDDI-Proxmox/releases/latest/download/pve-sdn-infoblox-uddi_VERSION-1+pveX_all.deb
 sudo dpkg -i pve-sdn-infoblox-uddi_*.deb
 sudo systemctl restart pveproxy pvedaemon
 ```
@@ -109,7 +109,7 @@ sudo apt install libnet-ip-perl libnetaddr-ip-perl libjson-perl liblwp-protocol-
 
 ## License
 
-See [LICENSE](LICENSE) file.
+This project is licensed under the [GNU Affero General Public License v3.0](LICENSE) — the same license family as Proxmox VE itself.
 
 ## Development
 

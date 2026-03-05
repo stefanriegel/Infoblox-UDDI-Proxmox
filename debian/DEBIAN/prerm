@@ -1,0 +1,48 @@
+#!/bin/bash
+set -e
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+IPAM_LOADER="/usr/share/perl5/PVE/Network/SDN/Ipams.pm"
+DNS_LOADER="/usr/share/perl5/PVE/Network/SDN/Dns.pm"
+
+IPAM_USE="use PVE::Network::SDN::Ipams::InfobloxPlugin;"
+IPAM_REG="PVE::Network::SDN::Ipams::InfobloxPlugin->register();"
+DNS_USE="use PVE::Network::SDN::Dns::InfobloxPlugin;"
+DNS_REG="PVE::Network::SDN::Dns::InfobloxPlugin->register();"
+
+# ── Functions ────────────────────────────────────────────────────────────────
+
+unpatch_loader() {
+    local file="$1"
+    local use_line="$2"
+    local reg_line="$3"
+
+    [ -f "$file" ] || return 0
+
+    if grep -qF "$use_line" "$file"; then
+        grep -vF "$use_line" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    fi
+    if grep -qF "$reg_line" "$file"; then
+        grep -vF "$reg_line" "$file" > "${file}.tmp" && mv "${file}.tmp" "$file"
+    fi
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+case "$1" in
+    remove|deconfigure)
+        unpatch_loader "$IPAM_LOADER" "$IPAM_USE" "$IPAM_REG"
+        unpatch_loader "$DNS_LOADER" "$DNS_USE" "$DNS_REG"
+        logger -t pve-sdn-infoblox-uddi "Removed SDN loader patches ($1)"
+        ;;
+    upgrade|failed-upgrade)
+        # Do NOT unpatch on upgrade -- postinst will re-patch after upgrade
+        ;;
+    *)
+        echo "prerm called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

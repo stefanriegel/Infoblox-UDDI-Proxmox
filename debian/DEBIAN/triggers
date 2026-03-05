@@ -1,0 +1,2 @@
+# Re-patch SDN loader files when libpve-network-perl is upgraded
+interest-noawait /usr/share/perl5/PVE/Network/SDN

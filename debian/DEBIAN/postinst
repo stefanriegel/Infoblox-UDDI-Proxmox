@@ -1,0 +1,48 @@
+#!/bin/bash
+set -e
+
+# ── Constants ────────────────────────────────────────────────────────────────
+
+IPAM_LOADER="/usr/share/perl5/PVE/Network/SDN/Ipams.pm"
+DNS_LOADER="/usr/share/perl5/PVE/Network/SDN/Dns.pm"
+
+IPAM_USE="use PVE::Network::SDN::Ipams::InfobloxPlugin;"
+IPAM_REG="PVE::Network::SDN::Ipams::InfobloxPlugin->register();"
+DNS_USE="use PVE::Network::SDN::Dns::InfobloxPlugin;"
+DNS_REG="PVE::Network::SDN::Dns::InfobloxPlugin->register();"
+
+# ── Functions ────────────────────────────────────────────────────────────────
+
+patch_loader() {
+    local file="$1"
+    local use_line="$2"
+    local reg_line="$3"
+    local init_pattern="$4"
+
+    [ -f "$file" ] || return 0
+
+    if ! grep -qF "$use_line" "$file"; then
+        sed -i "/${init_pattern}/i ${use_line}" "$file"
+    fi
+    if ! grep -qF "$reg_line" "$file"; then
+        sed -i "/${init_pattern}/i ${reg_line}" "$file"
+    fi
+}
+
+# ── Main ─────────────────────────────────────────────────────────────────────
+
+case "$1" in
+    configure|triggered)
+        patch_loader "$IPAM_LOADER" "$IPAM_USE" "$IPAM_REG" "Ipams::Plugin->init"
+        patch_loader "$DNS_LOADER" "$DNS_USE" "$DNS_REG" "Dns::Plugin->init"
+        logger -t pve-sdn-infoblox-uddi "Patched SDN loader files ($1)"
+        ;;
+    abort-upgrade|abort-remove|abort-deconfigure)
+        ;;
+    *)
+        echo "postinst called with unknown argument '$1'" >&2
+        exit 1
+        ;;
+esac
+
+exit 0

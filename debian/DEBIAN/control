@@ -1,0 +1,12 @@
+Package: pve-sdn-infoblox-uddi
+Version: VERSION_PLACEHOLDER
+Architecture: all
+Maintainer: Stefan Riegel <stefan@riegel.tech>
+Depends: libpve-network-perl, libnet-ip-perl, libnetaddr-ip-perl, libjson-perl, liblwp-protocol-https-perl
+Section: admin
+Priority: optional
+Homepage: https://github.com/stefanriegel/Infoblox-UDDI-Proxmox
+Description: Proxmox SDN IPAM and DNS plugin for Infoblox Universal DDI
+ Provides automated IP address management and DNS record lifecycle
+ for Proxmox VE virtual machines and containers through the
+ Infoblox Universal DDI (BloxOne DDI) API.

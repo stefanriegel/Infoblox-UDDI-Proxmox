@@ -32,6 +32,23 @@ sub get_all_calls {
     return \@call_history;
 }
 
+# Helper: find the longest matching pattern for a given method+url
+sub _best_match {
+    my ($registry, $method, $url) = @_;
+    my $best_key;
+    my $best_len = -1;
+    for my $key (keys %$registry) {
+        my ($mock_method, $pattern) = split(/:/, $key, 2);
+        if ($method eq $mock_method && $url =~ /\Q$pattern\E/) {
+            if (length($pattern) > $best_len) {
+                $best_key = $key;
+                $best_len = length($pattern);
+            }
+        }
+    }
+    return $best_key;
+}
+
 # Override PVE::Network::SDN::api_request with our mock
 {
     no warnings 'redefine';
@@ -45,20 +62,13 @@ sub get_all_calls {
             params  => $params,
         };
 
-        # Try to match against registered mocks
-        for my $key (keys %mock_errors) {
-            my ($mock_method, $pattern) = split(/:/, $key, 2);
-            if ($method eq $mock_method && $url =~ /\Q$pattern\E/) {
-                die $mock_errors{$key};
-            }
-        }
+        # Check errors first (longest match wins)
+        my $err_key = _best_match(\%mock_errors, $method, $url);
+        die $mock_errors{$err_key} if defined $err_key;
 
-        for my $key (keys %mock_responses) {
-            my ($mock_method, $pattern) = split(/:/, $key, 2);
-            if ($method eq $mock_method && $url =~ /\Q$pattern\E/) {
-                return $mock_responses{$key};
-            }
-        }
+        # Check responses (longest match wins)
+        my $resp_key = _best_match(\%mock_responses, $method, $url);
+        return $mock_responses{$resp_key} if defined $resp_key;
 
         die "unexpected api_request: $method $url";
     };

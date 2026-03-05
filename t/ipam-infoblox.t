@@ -808,4 +808,90 @@ subtest 'update_ip with noerr=1 returns undef on error' => sub {
     is($result, undef, 'returns undef with noerr=1');
 };
 
+# -- get_ips_from_mac tests --
+
+subtest 'get_ips_from_mac returns matching IPv4 addresses' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [
+            { address => '10.0.0.5' },
+            { address => '10.0.0.6' },
+        ],
+    });
+
+    my $result = PVE::Network::SDN::Ipams::InfobloxPlugin->get_ips_from_mac(
+        $config, 'AA:BB:CC:DD:EE:FF', 'simple1',
+    );
+
+    is(ref $result, 'HASH', 'returns a hashref');
+    is_deeply($result->{ip4}, { '10.0.0.5' => 1, '10.0.0.6' => 1 },
+              'ip4 contains both matching addresses');
+    is_deeply($result->{ip6}, {}, 'ip6 is empty (no IPv6 results)');
+
+    # Verify the query used hwaddr filter
+    my $calls = mock_api::get_all_calls();
+    my @get_calls = grep { $_->{method} eq 'GET' } @$calls;
+    ok(scalar @get_calls >= 1, 'at least one GET call made');
+    like($get_calls[-1]->{url}, qr/hwaddr/, 'query includes hwaddr filter');
+};
+
+subtest 'get_ips_from_mac with IPv4 and IPv6 addresses' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [
+            { address => '10.0.0.5' },
+            { address => 'fd00::5' },
+            { address => '10.0.0.6' },
+            { address => '2001:db8::1' },
+        ],
+    });
+
+    my $result = PVE::Network::SDN::Ipams::InfobloxPlugin->get_ips_from_mac(
+        $config, 'AA:BB:CC:DD:EE:FF', 'simple1',
+    );
+
+    is_deeply($result->{ip4}, { '10.0.0.5' => 1, '10.0.0.6' => 1 },
+              'ip4 contains IPv4 addresses');
+    is_deeply($result->{ip6}, { 'fd00::5' => 1, '2001:db8::1' => 1 },
+              'ip6 contains IPv6 addresses');
+};
+
+subtest 'get_ips_from_mac with no matches returns empty hashes' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [],
+    });
+
+    my $result = PVE::Network::SDN::Ipams::InfobloxPlugin->get_ips_from_mac(
+        $config, 'AA:BB:CC:DD:EE:FF', 'simple1',
+    );
+
+    is_deeply($result->{ip4}, {}, 'ip4 is empty');
+    is_deeply($result->{ip6}, {}, 'ip6 is empty');
+};
+
+subtest 'get_ips_from_mac with API error returns empty hashes (graceful)' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/ipam/address', "connection refused\n");
+
+    my $result = PVE::Network::SDN::Ipams::InfobloxPlugin->get_ips_from_mac(
+        $config, 'AA:BB:CC:DD:EE:FF', 'simple1',
+    );
+
+    is(ref $result, 'HASH', 'returns a hashref even on error');
+    is_deeply($result->{ip4}, {}, 'ip4 is empty on error');
+    is_deeply($result->{ip6}, {}, 'ip6 is empty on error');
+};
+
+# -- Coverage summary test --
+
+subtest 'coverage_summary - all methods implemented' => sub {
+    can_ok('PVE::Network::SDN::Ipams::InfobloxPlugin',
+        qw(type properties options
+           add_subnet del_subnet update_subnet
+           add_ip del_ip update_ip
+           add_next_freeip add_range_next_freeip
+           get_ips_from_mac on_update_hook));
+};
+
 done_testing;

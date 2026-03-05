@@ -47,11 +47,14 @@ jobs:
           mkdir -p "$PKG_DIR/DEBIAN"
           mkdir -p "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Ipams"
           mkdir -p "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Dns"
+          mkdir -p "$PKG_DIR/usr/share/javascript/pve-sdn-infoblox-uddi"
 
           cp src/PVE/Network/SDN/Ipams/InfobloxPlugin.pm \
              "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Ipams/"
           cp src/PVE/Network/SDN/Dns/InfobloxPlugin.pm \
              "$PKG_DIR/usr/share/perl5/PVE/Network/SDN/Dns/"
+          cp src/js/infobloxuddi-sdn.js \
+             "$PKG_DIR/usr/share/javascript/pve-sdn-infoblox-uddi/"
 
           sed "s/VERSION_PLACEHOLDER/${VERSION}-1+pve${{ matrix.pve_version }}/" \
               debian/DEBIAN/control > "$PKG_DIR/DEBIAN/control"

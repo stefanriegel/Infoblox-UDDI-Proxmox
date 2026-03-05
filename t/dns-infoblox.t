@@ -222,4 +222,130 @@ subtest 'find_dns_record_id appends trailing dot if missing' => sub {
          'query includes trailing dot in FQDN');
 };
 
+# -- verify_zone tests --
+
+subtest 'verify_zone with existing zone succeeds' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/zone-uuid-456', fqdn => 'example.com.' }],
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->verify_zone(
+            $config, 'example.com', 0,
+        );
+    };
+    $err = $@;
+    is($err, '', 'verify_zone succeeds for existing zone');
+};
+
+subtest 'verify_zone with missing zone dies' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->verify_zone(
+            $config, 'example.com', 0,
+        );
+    };
+    like($@, qr/zone.*not found/, 'dies with zone not found message');
+};
+
+subtest 'verify_zone with missing DNS View dies' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->verify_zone(
+            $config, 'example.com', 0,
+        );
+    };
+    like($@, qr/DNS View.*not found/, 'dies with DNS View not found message');
+};
+
+subtest 'verify_zone with noerr=1 returns undef instead of dying' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    my $result;
+    eval {
+        $result = PVE::Network::SDN::Dns::InfobloxPlugin->verify_zone(
+            $config, 'example.com', 1,
+        );
+    };
+    is($@, '', 'does not die with noerr=1');
+    is($result, undef, 'returns undef with noerr=1');
+};
+
+# -- on_update_hook tests --
+
+subtest 'on_update_hook with valid config succeeds' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+
+    my $err;
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($config);
+    };
+    $err = $@;
+    is($err, '', 'on_update_hook succeeds with valid config');
+};
+
+subtest 'on_update_hook with unreachable API' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/dns/view', "connection refused\n");
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($config);
+    };
+    like($@, qr/Cannot reach Infoblox API at/, 'dies with unreachable API message');
+};
+
+subtest 'on_update_hook with invalid token' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_error('GET', '/dns/view', "401 Unauthorized\n");
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($config);
+    };
+    like($@, qr/Authentication failed: invalid API token/, 'dies with auth failure message');
+};
+
+subtest 'on_update_hook with missing DNS View' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [],
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->on_update_hook($config);
+    };
+    like($@, qr/DNS View.*not found in Infoblox/, 'dies with DNS View not found message');
+};
+
+# -- Coverage summary test --
+
+subtest 'coverage_summary - all methods exist' => sub {
+    can_ok('PVE::Network::SDN::Dns::InfobloxPlugin',
+        qw(type properties options
+           verify_zone on_update_hook
+           add_a_record add_ptr_record del_a_record del_ptr_record
+           get_reversedns_zone));
+};
+
 done_testing;

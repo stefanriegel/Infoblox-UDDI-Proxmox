@@ -158,8 +158,14 @@ my $subnet = {
     network => '10.0.0.0',
 };
 
-subtest 'add_subnet is a no-op (subnets managed in Infoblox)' => sub {
+subtest 'add_subnet verifies subnet exists in IP Space' => sub {
     mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/subnet-uuid-456', address => '10.0.0.0/24' }],
+    });
 
     my $err;
     eval {
@@ -168,10 +174,22 @@ subtest 'add_subnet is a no-op (subnets managed in Infoblox)' => sub {
         );
     };
     $err = $@;
-    is($err, '', 'add_subnet succeeds without any API calls');
+    is($err, '', 'add_subnet succeeds for existing subnet');
+};
 
-    my @calls = @{mock_api::get_all_calls()};
-    is(scalar @calls, 0, 'no API calls made (no-op)');
+subtest 'add_subnet dies when subnet missing' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/test-uuid-123', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', { results => [] });
+
+    eval {
+        PVE::Network::SDN::Ipams::InfobloxPlugin->add_subnet(
+            $config, 'simple1-10.0.0.0-24', $subnet, 0,
+        );
+    };
+    like($@, qr/subnet.*not found.*IP Space/, 'dies with subnet not found message');
 };
 
 subtest 'del_subnet is a no-op' => sub {

@@ -376,7 +376,7 @@ subtest 'add_a_record creates new A record' => sub {
     is($post->{params}->{rdata}->{address}, '10.0.0.5', 'rdata.address is correct');
     is($post->{params}->{name_in_zone}, 'webserver', 'name_in_zone is hostname');
     is($post->{params}->{zone}, 'dns/auth_zone/zone-uuid-456', 'zone is auth_zone resource ID');
-    is($post->{params}->{view}, 'dns/view/view-uuid-123', 'view is DNS View resource ID');
+    ok(!exists $post->{params}->{view}, 'view not sent in POST (zone implies view)');
     is($post->{params}->{ttl}, 3600, 'ttl defaults to 3600');
     is($post->{params}->{comment}, 'managed by proxmox', 'comment is set');
     is($post->{params}->{tags}->{source}, 'proxmox', 'tags.source is proxmox');
@@ -660,7 +660,7 @@ subtest 'add_ptr_record creates new PTR record' => sub {
        'rdata.dname has trailing dot');
     is($post->{params}->{name_in_zone}, '5', 'name_in_zone is host part relative to zone');
     is($post->{params}->{zone}, 'dns/auth_zone/rev-zone-uuid', 'zone is reverse zone resource ID');
-    is($post->{params}->{view}, 'dns/view/view-uuid-123', 'view is DNS View resource ID');
+    ok(!exists $post->{params}->{view}, 'view not sent in POST (zone implies view)');
     is($post->{params}->{ttl}, 3600, 'ttl defaults to 3600');
     is($post->{params}->{comment}, 'managed by proxmox', 'comment is set');
     is($post->{params}->{tags}->{source}, 'proxmox', 'tags.source is proxmox');

@@ -83,17 +83,21 @@ subtest 'VM lifecycle: gateway reservation + allocate IP + A record + PTR record
     is($phase_a_posts[0]->{params}->{comment}, 'gateway', 'Phase A: comment is "gateway"');
     is($phase_a_posts[0]->{params}->{tags}->{gateway}, 'true', 'Phase A: tags.gateway is "true"');
 
-    # -- Phase B: add_subnet (no-op) --
+    # -- Phase B: Verify subnet exists --
     mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+    });
 
     eval {
         PVE::Network::SDN::Ipams::InfobloxPlugin->add_subnet(
             $ipam_config, 'simple1-10.0.0.0-24', $subnet_24, 0,
         );
     };
-    is($@, '', 'Phase B: add_subnet succeeds (no-op)');
-    my $phase_b_calls = mock_api::get_all_calls();
-    is(scalar @$phase_b_calls, 0, 'Phase B: no API calls (no-op)');
+    is($@, '', 'Phase B: subnet verification succeeds');
 
     # -- Phase C: Allocate VM IP --
     mock_api::clear_mocks();
@@ -344,15 +348,21 @@ subtest 'multi-VM: create VM1, create VM2, delete VM1, verify VM2 unaffected' =>
 subtest 'repeated pvesh apply: second pass uses PATCH not POST for existing resources' => sub {
 
     # -- First pass: fresh creation (POST paths) --
-    # add_subnet (no-op)
+    # add_subnet (verify-only)
     mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+    });
 
     eval {
         PVE::Network::SDN::Ipams::InfobloxPlugin->add_subnet(
             $ipam_config, 'simple1-10.0.0.0-24', $subnet_24, 0,
         );
     };
-    is($@, '', 'First pass: add_subnet succeeds (no-op)');
+    is($@, '', 'First pass: add_subnet succeeds');
 
     # add_ip for 10.0.0.5 (POST path since address doesn't exist)
     mock_api::clear_mocks();
@@ -405,15 +415,21 @@ subtest 'repeated pvesh apply: second pass uses PATCH not POST for existing reso
     is(scalar @first_a_posts, 1, 'First pass: add_a_record used POST (new record)');
 
     # -- Second pass: existing resources (PATCH paths) --
-    # add_subnet (no-op)
+    # add_subnet (verify-only)
     mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/ip_space', {
+        results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+    });
+    mock_api::mock_response('GET', '/ipam/subnet', {
+        results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+    });
 
     eval {
         PVE::Network::SDN::Ipams::InfobloxPlugin->add_subnet(
             $ipam_config, 'simple1-10.0.0.0-24', $subnet_24, 0,
         );
     };
-    is($@, '', 'Second pass: add_subnet still succeeds (no-op)');
+    is($@, '', 'Second pass: add_subnet still succeeds');
 
     # add_ip for 10.0.0.5: GET finds existing -> uses PATCH
     mock_api::clear_mocks();
@@ -1143,18 +1159,25 @@ subtest 'PITFALL 5: PTR prefix lengths - /24, /22, /16 reverse zones compute cor
 
 subtest 'PITFALL 6: non-idempotent creates - repeated add uses PATCH not POST' => sub {
 
-    # --- add_subnet: called twice, both succeed (no-op) ---
+    # --- add_subnet: called twice, both succeed (verify-only, no writes) ---
     for my $pass (1, 2) {
         mock_api::clear_mocks();
+        mock_api::mock_response('GET', '/ipam/ip_space', {
+            results => [{ id => 'ipam/ip_space/space-1', name => 'TestSpace' }],
+        });
+        mock_api::mock_response('GET', '/ipam/subnet', {
+            results => [{ id => 'ipam/subnet/sub-24', address => '10.0.0.0/24' }],
+        });
 
         eval {
             PVE::Network::SDN::Ipams::InfobloxPlugin->add_subnet(
                 $ipam_config, 'simple1-10.0.0.0-24', $subnet_24, 0,
             );
         };
-        is($@, '', "add_subnet pass $pass succeeds (no-op)");
+        is($@, '', "add_subnet pass $pass succeeds");
         my $calls = mock_api::get_all_calls();
-        is(scalar @$calls, 0, "add_subnet pass $pass: zero API calls (no-op)");
+        my @posts = grep { $_->{method} eq 'POST' } @$calls;
+        is(scalar @posts, 0, "add_subnet pass $pass: zero POST calls (verify only)");
     }
 
     # --- add_ip: first call POST (new), second call PATCH (existing) ---

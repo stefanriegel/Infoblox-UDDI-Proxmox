@@ -160,10 +160,9 @@ sub add_a_record {
             infoblox_api_request($plugin_config, "PATCH",
                 "/$existing_id", $params);
         } else {
-            # Create new record via POST
+            # Create new record via POST (zone implies view — do not send both)
             $params->{name_in_zone} = $hostname;
             $params->{zone}         = $zone_id;
-            $params->{view}         = $view_id;
             infoblox_api_request($plugin_config, "POST",
                 "/dns/record", $params);
         }
@@ -227,10 +226,9 @@ sub add_ptr_record {
             infoblox_api_request($plugin_config, "PATCH",
                 "/$existing_id", $params);
         } else {
-            # Create new record via POST
+            # Create new record via POST (zone implies view — do not send both)
             $params->{name_in_zone} = $name_in_zone;
             $params->{zone}         = $zone_id;
-            $params->{view}         = $view_id;
             infoblox_api_request($plugin_config, "POST",
                 "/dns/record", $params);
         }

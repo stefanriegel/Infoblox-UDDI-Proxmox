@@ -138,23 +138,8 @@ sub get_range_id {
 
 sub add_subnet {
     my ($class, $plugin_config, $subnetid, $subnet, $noerr) = @_;
-    my $cidr = $subnet->{cidr};
-
-    # Resolve IP Space name to ID
-    my $space_id = get_ip_space_id($plugin_config, $plugin_config->{ip_space});
-    if (!$space_id) {
-        die "IP Space \"$plugin_config->{ip_space}\" not found in Infoblox\n" if !$noerr;
-        return;
-    }
-
-    # Verify subnet exists in correct IP Space
-    my $subnet_id = get_subnet_id($plugin_config, $cidr, $space_id);
-    if (!$subnet_id) {
-        die "subnet $cidr not found in IP Space \"$plugin_config->{ip_space}\"\n" if !$noerr;
-        return;
-    }
-
-    # Subnet exists in correct IP Space -- verification passed
+    # No-op: subnets in Infoblox are managed by network teams.
+    # Subnet existence is validated at IP allocation time.
     return;
 }
 

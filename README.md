@@ -42,16 +42,16 @@ Then configure the IPAM and DNS providers in the Proxmox SDN configuration (Data
 
 | Property    | Description                          | Example                      |
 |-------------|--------------------------------------|------------------------------|
-| `api_url`   | Infoblox Universal DDI API base URL  | `https://csp.infoblox.com`   |
-| `api_token` | API authentication token             | (from Infoblox portal)       |
+| `url`       | Infoblox Universal DDI API base URL  | `https://csp.infoblox.com`   |
+| `token`     | API authentication token             | (from Infoblox portal)       |
 | `ip_space`  | IP Space name for address allocation | `Default`                    |
 
 ### DNS Plugin (type: `infobloxuddi`)
 
 | Property    | Description                          | Example                      |
 |-------------|--------------------------------------|------------------------------|
-| `api_url`   | Infoblox Universal DDI API base URL  | `https://csp.infoblox.com`   |
-| `api_token` | API authentication token             | (from Infoblox portal)       |
+| `url`       | Infoblox Universal DDI API base URL  | `https://csp.infoblox.com`   |
+| `token`     | API authentication token             | (from Infoblox portal)       |
 | `dns_view`  | DNS View name for record management  | `default`                    |
 
 Configuration is managed through the Proxmox web UI under Datacenter > SDN, or via `/etc/pve/sdn/ipams.cfg` and `/etc/pve/sdn/dns.cfg`.
@@ -93,7 +93,7 @@ Check registration: `grep InfobloxPlugin /usr/share/perl5/PVE/Network/SDN/Ipams.
 If using .deb, check the trigger fired: `journalctl -t pve-sdn-infoblox-uddi`. If using the script, re-run `sudo bash install.sh`.
 
 **Authentication error**
-Verify `api_token` is correct. The plugin uses `Authorization: Token <key>` header format. Ensure the token has appropriate permissions in the Infoblox portal.
+Verify `token` is correct. The plugin uses `Authorization: Token <key>` header format. Ensure the token has appropriate permissions in the Infoblox portal.
 
 **Missing Perl module errors**
 Install missing packages:

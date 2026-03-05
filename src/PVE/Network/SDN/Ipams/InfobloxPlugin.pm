@@ -108,7 +108,36 @@ sub get_address_id {
     return $result->{results}->[0]->{id};
 }
 
-# --- IPAM interface method stubs (implemented in subsequent plans) ---
+# --- Private helper: build metadata params for address objects ---
+
+sub build_address_params {
+    my ($hostname, $mac, $vmid) = @_;
+    my $params = {};
+    $params->{comment} = $hostname if $hostname;
+    $params->{names} = [{ name => $hostname, type => "user" }] if $hostname;
+    my $tags = { source => "proxmox" };
+    $tags->{vmid} = "$vmid" if defined $vmid;
+    $params->{tags} = $tags;
+    $params->{hwaddr} = $mac if $mac;
+    return $params;
+}
+
+# --- Private helper: resolve range by start/end IP ---
+
+sub get_range_id {
+    my ($config, $start, $end, $space_id) = @_;
+    my $result = eval {
+        infoblox_api_request(
+            $config, "GET",
+            "/ipam/range?_filter=start==\"$start\" and end==\"$end\" and space==\"$space_id\"",
+            undef,
+        );
+    };
+    return undef if $@ || !$result || !$result->{results} || scalar(@{$result->{results}}) == 0;
+    return $result->{results}->[0]->{id};
+}
+
+# --- IPAM interface methods ---
 
 sub add_subnet {
     my ($class, $plugin_config, $subnetid, $subnet, $noerr) = @_;
@@ -161,12 +190,97 @@ sub del_ip {
 
 sub add_next_freeip {
     my ($class, $plugin_config, $subnetid, $subnet, $hostname, $mac, $vmid, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $cidr = $subnet->{cidr};
+    my $space_id = get_ip_space_id($plugin_config, $plugin_config->{ip_space});
+    if (!$space_id) {
+        die "IP Space \"$plugin_config->{ip_space}\" not found\n" if !$noerr;
+        return;
+    }
+
+    my $infoblox_subnet_id = get_subnet_id($plugin_config, $cidr, $space_id);
+    if (!$infoblox_subnet_id) {
+        die "subnet $cidr not found in IP Space \"$plugin_config->{ip_space}\"\n" if !$noerr;
+        return;
+    }
+
+    my $ip = eval {
+        my $result = infoblox_api_request(
+            $plugin_config, "POST",
+            "/ipam/subnet/$infoblox_subnet_id/nextavailableip",
+            undef,
+        );
+
+        my $address = $result->{results}->[0]->{address};
+        my $address_id = $result->{results}->[0]->{id};
+
+        # Set metadata on the allocated address
+        my $params = build_address_params($hostname, $mac, $vmid);
+        infoblox_api_request(
+            $plugin_config, "PATCH",
+            "/ipam/address/$address_id",
+            $params,
+        );
+
+        return $address;
+    };
+
+    if ($@) {
+        die "can't find free ip in subnet $cidr: $@" if !$noerr;
+        return;
+    }
+
+    return $ip;
 }
 
 sub add_range_next_freeip {
     my ($class, $plugin_config, $subnet, $range, $data, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $cidr = $subnet->{cidr};
+    my $start = $range->{'start-address'};
+    my $end = $range->{'end-address'};
+    my $hostname = $data->{hostname};
+    my $mac = $data->{mac};
+    my $vmid = $data->{vmid};
+
+    my $space_id = get_ip_space_id($plugin_config, $plugin_config->{ip_space});
+    if (!$space_id) {
+        die "IP Space \"$plugin_config->{ip_space}\" not found\n" if !$noerr;
+        return;
+    }
+
+    my $range_id = get_range_id($plugin_config, $start, $end, $space_id);
+    if (!$range_id) {
+        die "range $start-$end not found in IP Space \"$plugin_config->{ip_space}\"\n" if !$noerr;
+        return;
+    }
+
+    my $ip = eval {
+        my $result = infoblox_api_request(
+            $plugin_config, "POST",
+            "/ipam/range/$range_id/nextavailableip",
+            undef,
+        );
+
+        my $address = $result->{results}->[0]->{address};
+        my $address_id = $result->{results}->[0]->{id};
+
+        my $params = build_address_params($hostname, $mac, $vmid);
+        infoblox_api_request(
+            $plugin_config, "PATCH",
+            "/ipam/address/$address_id",
+            $params,
+        );
+
+        return $address;
+    };
+
+    if ($@) {
+        die "can't find free ip in range $start-$end: $@" if !$noerr;
+        return;
+    }
+
+    return $ip;
 }
 
 sub get_ips_from_mac {

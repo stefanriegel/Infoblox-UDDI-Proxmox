@@ -184,7 +184,69 @@ sub add_a_record {
 
 sub add_ptr_record {
     my ($class, $plugin_config, $zone, $hostname, $ip, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $view_name = $plugin_config->{dns_view} || 'default';
+
+    # Resolve DNS View ID
+    my $view_id = get_dns_view_id($plugin_config);
+    if (!$view_id) {
+        die "DNS View \"$view_name\" not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    # Resolve auth zone ID for the reverse zone
+    my $zone_id = get_auth_zone_id($plugin_config, $zone, $view_id);
+    if (!$zone_id) {
+        die "zone $zone not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    eval {
+        # Compute PTR rdata.dname: hostname is already FQDN from Proxmox, just add trailing dot
+        my $dname = $hostname;
+        $dname .= '.' unless $dname =~ /\.$/;
+
+        # Compute full reverse IP name (e.g., "5.0.0.10.in-addr.arpa.")
+        my $reverse_ip = Net::IP->new($ip)->reverse_ip();
+
+        # Compute name_in_zone: strip the zone suffix from the full reverse name
+        my $zone_suffix = $zone;
+        $zone_suffix .= '.' unless $zone_suffix =~ /\.$/;
+        my $name_in_zone = $reverse_ip;
+        $name_in_zone =~ s/\.\Q$zone_suffix\E$//;
+
+        # Check for existing PTR record (GET-before-POST idempotency)
+        my $existing_id = find_dns_record_id($plugin_config, $reverse_ip, 'PTR', $view_id);
+
+        my $ttl = $plugin_config->{ttl} || 3600;
+        my $params = {
+            type    => 'PTR',
+            rdata   => { dname => $dname },
+            ttl     => $ttl,
+            comment => 'managed by proxmox',
+            tags    => { source => 'proxmox' },
+        };
+
+        if ($existing_id) {
+            # Record exists -- update via PATCH
+            infoblox_api_request($plugin_config, "PATCH",
+                "/dns/record/$existing_id", $params);
+        } else {
+            # Create new record via POST
+            $params->{name_in_zone} = $name_in_zone;
+            $params->{zone}         = $zone_id;
+            $params->{view}         = $view_id;
+            infoblox_api_request($plugin_config, "POST",
+                "/dns/record", $params);
+        }
+    };
+
+    if ($@) {
+        die "error adding PTR record for $ip: $@\n" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub del_a_record {
@@ -222,7 +284,37 @@ sub del_a_record {
 
 sub del_ptr_record {
     my ($class, $plugin_config, $zone, $ip, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $view_name = $plugin_config->{dns_view} || 'default';
+
+    # Resolve DNS View ID
+    my $view_id = get_dns_view_id($plugin_config);
+    if (!$view_id) {
+        die "DNS View \"$view_name\" not found in Infoblox\n" if !$noerr;
+        return;
+    }
+
+    eval {
+        # Compute full reverse IP name
+        my $reverse_ip = Net::IP->new($ip)->reverse_ip();
+
+        # Find existing PTR record by reverse IP name
+        my $record_id = find_dns_record_id($plugin_config, $reverse_ip, 'PTR', $view_id);
+
+        if ($record_id) {
+            # Record found -- delete it
+            infoblox_api_request($plugin_config, "DELETE",
+                "/dns/record/$record_id", undef);
+        }
+        # If not found, return silently (idempotent delete)
+    };
+
+    if ($@) {
+        die "error deleting PTR record for $ip: $@\n" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub verify_zone {
@@ -249,7 +341,30 @@ sub verify_zone {
 
 sub get_reversedns_zone {
     my ($class, $plugin_config, $subnetid, $subnet, $ip) = @_;
-    die "not yet implemented\n";
+
+    # Resolve DNS View ID; return "" if not found (Proxmox skips PTR when empty)
+    my $view_id = get_dns_view_id($plugin_config);
+    return "" if !$view_id;
+
+    # Compute full reverse IP name (e.g., "5.0.0.10.in-addr.arpa.")
+    my $reverse_ip = Net::IP->new($ip)->reverse_ip();
+
+    # Split on '.' and remove host part (least significant octet)
+    my @parts = split(/\./, $reverse_ip);
+    shift @parts;  # remove host part
+
+    # Walk up the reverse name hierarchy to find matching auth_zone
+    # Minimum meaningful reverse zone is x.in-addr.arpa. (3 parts without trailing dot)
+    while (scalar(@parts) > 2) {
+        my $candidate = join('.', @parts) . '.';  # trailing dot for DNS convention
+        my $zone_id = get_auth_zone_id($plugin_config, $candidate, $view_id);
+        if ($zone_id) {
+            return $candidate;
+        }
+        shift @parts;  # try parent zone
+    }
+
+    return "";  # no reverse zone found
 }
 
 sub on_update_hook {

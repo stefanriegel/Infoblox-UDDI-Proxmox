@@ -219,12 +219,65 @@ sub add_ip {
 
 sub update_ip {
     my ($class, $plugin_config, $subnetid, $subnet, $ip, $hostname, $mac, $vmid, $is_gateway, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $space_id = get_ip_space_id($plugin_config, $plugin_config->{ip_space});
+    if (!$space_id) {
+        die "IP Space \"$plugin_config->{ip_space}\" not found\n" if !$noerr;
+        return;
+    }
+
+    eval {
+        my $address_id = get_address_id($plugin_config, $ip, $space_id);
+        die "address $ip not found in IP Space \"$plugin_config->{ip_space}\"\n" if !$address_id;
+
+        my $comment = $is_gateway ? "gateway" : $hostname;
+        my $params = build_address_params($comment, $mac, $vmid);
+        $params->{tags}->{gateway} = "true" if $is_gateway;
+
+        infoblox_api_request(
+            $plugin_config, "PATCH",
+            "/ipam/address/$address_id",
+            $params,
+        );
+    };
+
+    if ($@) {
+        die "error updating IP $ip: $@" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub del_ip {
     my ($class, $plugin_config, $subnetid, $subnet, $ip, $noerr) = @_;
-    die "not yet implemented\n";
+
+    my $space_id = get_ip_space_id($plugin_config, $plugin_config->{ip_space});
+    if (!$space_id) {
+        die "IP Space \"$plugin_config->{ip_space}\" not found\n" if !$noerr;
+        return;
+    }
+
+    eval {
+        my $address_id = get_address_id($plugin_config, $ip, $space_id);
+        if (!$address_id) {
+            # Address not found -- already released, idempotent success
+            return;
+        }
+
+        infoblox_api_request(
+            $plugin_config, "DELETE",
+            "/ipam/address/$address_id",
+            undef,
+        );
+    };
+
+    if ($@) {
+        die "error deleting IP $ip: $@" if !$noerr;
+        return;
+    }
+
+    return;
 }
 
 sub add_next_freeip {

@@ -114,6 +114,8 @@ sub build_address_params {
     $params->{names} = [{ name => $hostname, type => "user" }] if $hostname;
     my $tags = { source => "proxmox" };
     $tags->{vmid} = "$vmid" if defined $vmid;
+    $tags->{hostname} = $hostname if $hostname;
+    $tags->{mac} = $mac if $mac;
     $params->{tags} = $tags;
     $params->{hwaddr} = $mac if $mac;
     return $params;

@@ -308,6 +308,8 @@ subtest 'add_next_freeip allocates IP with correct metadata' => sub {
               'names contains hostname with type user');
     is($post_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
     is($post_params->{tags}->{vmid}, '100', 'tags has vmid as string');
+    is($post_params->{tags}->{hostname}, 'vm-web', 'tags has hostname');
+    is($post_params->{tags}->{mac}, 'AA:BB:CC:DD:EE:FF', 'tags has mac');
     is($post_params->{hwaddr}, 'AA:BB:CC:DD:EE:FF', 'hwaddr is set when MAC provided');
 };
 
@@ -337,6 +339,8 @@ subtest 'add_next_freeip without MAC omits hwaddr' => sub {
     my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
     my $post_params = $post_calls[0]->{params};
     ok(!exists $post_params->{hwaddr}, 'hwaddr is NOT set when MAC is undef');
+    ok(!exists $post_params->{tags}->{mac}, 'tags does NOT have mac when MAC is undef');
+    is($post_params->{tags}->{hostname}, 'vm-web', 'tags has hostname even without MAC');
 };
 
 subtest 'add_next_freeip with noerr returns undef on failure' => sub {
@@ -410,6 +414,7 @@ subtest 'add_range_next_freeip allocates from range' => sub {
     my $post_params = $post_calls[0]->{params};
     is($post_params->{comment}, 'vm-db', 'comment is hostname from $data');
     is($post_params->{tags}->{vmid}, '101', 'vmid from $data');
+    is($post_params->{tags}->{hostname}, 'vm-db', 'tags has hostname from $data');
 };
 
 subtest 'add_range_next_freeip dies when range not found' => sub {
@@ -470,6 +475,8 @@ subtest 'add_ip creates new address with correct metadata' => sub {
               'names contains hostname');
     is($post_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
     is($post_params->{tags}->{vmid}, '100', 'tags has vmid as string');
+    is($post_params->{tags}->{hostname}, 'vm-web', 'tags has hostname');
+    is($post_params->{tags}->{mac}, 'AA:BB:CC:DD:EE:FF', 'tags has mac');
     is($post_params->{hwaddr}, 'AA:BB:CC:DD:EE:FF', 'hwaddr is set');
 };
 
@@ -533,6 +540,8 @@ subtest 'add_ip with gateway sets comment to gateway and adds gateway tag' => su
     my $post_params = $post_calls[0]->{params};
     is($post_params->{comment}, 'gateway', 'comment is "gateway" not hostname');
     is($post_params->{tags}->{gateway}, 'true', 'tags has gateway=true');
+    is($post_params->{tags}->{hostname}, 'gateway', 'tags hostname is "gateway" for gateway addresses');
+    ok(!exists $post_params->{tags}->{mac}, 'tags does NOT have mac when MAC is undef');
 };
 
 subtest 'add_ip with noerr returns undef on failure' => sub {
@@ -681,6 +690,8 @@ subtest 'update_ip patches metadata on existing address' => sub {
     is($patch_params->{hwaddr}, 'FF:FF:FF:FF:FF:FF', 'hwaddr updated');
     is($patch_params->{tags}->{source}, 'proxmox', 'tags has source=proxmox');
     is($patch_params->{tags}->{vmid}, '100', 'tags has vmid as string');
+    is($patch_params->{tags}->{hostname}, 'vm-web-new', 'tags has updated hostname');
+    is($patch_params->{tags}->{mac}, 'FF:FF:FF:FF:FF:FF', 'tags has updated mac');
 };
 
 subtest 'update_ip with is_gateway sets comment to gateway and gateway tag' => sub {

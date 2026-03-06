@@ -32,14 +32,23 @@ sub get_all_calls {
     return \@call_history;
 }
 
+# URL-decode a string (e.g., %3D -> =, %22 -> ", %20 -> space)
+sub _uri_decode {
+    my ($str) = @_;
+    $str =~ s/%([0-9A-Fa-f]{2})/chr(hex($1))/ge;
+    return $str;
+}
+
 # Helper: find the longest matching pattern for a given method+url
 sub _best_match {
     my ($registry, $method, $url) = @_;
+    # URL-decode the incoming URL so mock patterns can use plain text
+    my $decoded_url = _uri_decode($url);
     my $best_key;
     my $best_len = -1;
     for my $key (keys %$registry) {
         my ($mock_method, $pattern) = split(/:/, $key, 2);
-        if ($method eq $mock_method && $url =~ /\Q$pattern\E/) {
+        if ($method eq $mock_method && $decoded_url =~ /\Q$pattern\E/) {
             if (length($pattern) > $best_len) {
                 $best_key = $key;
                 $best_len = length($pattern);
@@ -55,9 +64,10 @@ sub _best_match {
     *PVE::Network::SDN::api_request = sub {
         my ($method, $url, $headers, $params) = @_;
 
+        # Store URL-decoded version so test assertions match plain text patterns
         push @call_history, {
             method  => $method,
-            url     => $url,
+            url     => _uri_decode($url),
             headers => $headers,
             params  => $params,
         };

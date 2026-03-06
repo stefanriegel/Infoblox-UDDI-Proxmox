@@ -38,11 +38,31 @@ sub options {
 
 # --- Private helper functions ---
 
+sub _uri_encode {
+    my ($str) = @_;
+    $str =~ s/([^A-Za-z0-9\-._~])/ sprintf("%%%02X", ord($1)) /ge;
+    return $str;
+}
+
 sub infoblox_api_request {
     my ($config, $method, $path, $params) = @_;
 
     my $url = $config->{url};
     $url = "https://$url" if $url !~ m|^https?://|;
+
+    # URL-encode query parameter values to avoid 400 errors from nginx
+    if ($path =~ /^([^?]*)\?(.+)$/) {
+        my ($base, $query) = ($1, $2);
+        my @encoded;
+        for my $pair (split(/&/, $query)) {
+            if ($pair =~ /^([^=]+)=(.*)$/) {
+                push @encoded, "$1=" . _uri_encode($2);
+            } else {
+                push @encoded, $pair;
+            }
+        }
+        $path = $base . '?' . join('&', @encoded);
+    }
 
     return PVE::Network::SDN::api_request(
         $method,
@@ -102,13 +122,14 @@ sub find_dns_record_id {
     # Append trailing dot if missing
     $fqdn .= '.' unless $fqdn =~ /\.$/;
 
+    # Note: /dns/record API does not support EQ filter on 'view' field.
+    # Use absolute_name_spec + type which is sufficient for uniqueness.
     my $result = eval {
         infoblox_api_request(
             $config, "GET",
             "/dns/record?_filter="
               . "absolute_name_spec==\"$fqdn\""
-              . " and type==\"$type\""
-              . " and view==\"$view_id\"",
+              . " and type==\"$type\"",
             undef,
         );
     };

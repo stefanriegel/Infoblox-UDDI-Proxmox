@@ -348,6 +348,35 @@ subtest 'Phase 1: Allocate IP via add_next_freeip' => sub {
 };
 
 # ============================================================================
+# Phase 1b: Verify get_ips_from_mac with uppercase MAC (bug fix validation)
+# ============================================================================
+
+subtest 'Phase 1b: get_ips_from_mac finds address with uppercase MAC' => sub {
+
+    # Phase 1 allocated with MAC 'AA:BB:CC:DD:EE:01' (uppercase)
+    # Infoblox stores hwaddr as lowercase 'aa:bb:cc:dd:ee:01'
+    # get_ips_from_mac must lowercase the input MAC before querying
+
+    my ($ip4, $ip6) = PVE::Network::SDN::Ipams::InfobloxPlugin->get_ips_from_mac(
+        $ipam_config, 'AA:BB:CC:DD:EE:01', undef,
+    );
+
+    ok(defined $ip4, 'get_ips_from_mac returns IPv4 with uppercase MAC input')
+        or diag("FAIL: uppercase MAC did not match -- this is the DNS cleanup bug");
+    is($ip4, $allocated_ip, "returned IP matches allocated IP ($allocated_ip)");
+
+    # Also test with already-lowercase MAC (should still work)
+    my ($ip4_lc, $ip6_lc) = PVE::Network::SDN::Ipams::InfobloxPlugin->get_ips_from_mac(
+        $ipam_config, 'aa:bb:cc:dd:ee:01', undef,
+    );
+
+    ok(defined $ip4_lc, 'get_ips_from_mac also works with lowercase MAC input');
+    is($ip4_lc, $allocated_ip, "lowercase MAC returns same IP ($allocated_ip)");
+
+    diag("--- Phase 1b complete: get_ips_from_mac case-insensitive ---");
+};
+
+# ============================================================================
 # Phase 2: Create DNS records
 # ============================================================================
 

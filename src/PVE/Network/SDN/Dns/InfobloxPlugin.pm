@@ -126,6 +126,11 @@ sub add_a_record {
     my ($class, $plugin_config, $zone, $hostname, $ip, $noerr) = @_;
 
     my $view_name = $plugin_config->{dns_view} || 'default';
+
+    # Strip zone suffix if hostname already includes it (PVE appends dnszoneprefix)
+    if ($hostname =~ /\.\Q$zone\E$/i) {
+        $hostname =~ s/\.\Q$zone\E$//i;
+    }
     my $fqdn = "${hostname}.${zone}";
 
     # Resolve DNS View ID
@@ -151,7 +156,7 @@ sub add_a_record {
             type    => 'A',
             rdata   => { address => $ip },
             ttl     => $ttl,
-            comment => 'managed by proxmox',
+            comment => "managed by proxmox: $hostname",
             tags    => { source => 'proxmox' },
         };
 
@@ -217,7 +222,7 @@ sub add_ptr_record {
             type    => 'PTR',
             rdata   => { dname => $dname },
             ttl     => $ttl,
-            comment => 'managed by proxmox',
+            comment => "managed by proxmox: $hostname",
             tags    => { source => 'proxmox' },
         };
 
@@ -246,6 +251,11 @@ sub del_a_record {
     my ($class, $plugin_config, $zone, $hostname, $ip, $noerr) = @_;
 
     my $view_name = $plugin_config->{dns_view} || 'default';
+
+    # Strip zone suffix if hostname already includes it (PVE appends dnszoneprefix)
+    if ($hostname =~ /\.\Q$zone\E$/i) {
+        $hostname =~ s/\.\Q$zone\E$//i;
+    }
     my $fqdn = "${hostname}.${zone}";
 
     # Resolve DNS View ID

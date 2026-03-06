@@ -378,7 +378,7 @@ subtest 'add_a_record creates new A record' => sub {
     is($post->{params}->{zone}, 'dns/auth_zone/zone-uuid-456', 'zone is auth_zone resource ID');
     ok(!exists $post->{params}->{view}, 'view not sent in POST (zone implies view)');
     is($post->{params}->{ttl}, 3600, 'ttl defaults to 3600');
-    is($post->{params}->{comment}, 'managed by proxmox', 'comment is set');
+    is($post->{params}->{comment}, 'managed by proxmox: webserver', 'comment includes hostname');
     is($post->{params}->{tags}->{source}, 'proxmox', 'tags.source is proxmox');
 };
 
@@ -662,7 +662,7 @@ subtest 'add_ptr_record creates new PTR record' => sub {
     is($post->{params}->{zone}, 'dns/auth_zone/rev-zone-uuid', 'zone is reverse zone resource ID');
     ok(!exists $post->{params}->{view}, 'view not sent in POST (zone implies view)');
     is($post->{params}->{ttl}, 3600, 'ttl defaults to 3600');
-    is($post->{params}->{comment}, 'managed by proxmox', 'comment is set');
+    is($post->{params}->{comment}, 'managed by proxmox: webserver.example.com', 'comment includes hostname');
     is($post->{params}->{tags}->{source}, 'proxmox', 'tags.source is proxmox');
 };
 
@@ -806,6 +806,63 @@ subtest 'del_ptr_record with noerr=1 returns undef on error' => sub {
         );
     };
     is($@, '', 'does not die with noerr=1');
+};
+
+# -- Zone-suffix deduplication tests --
+
+subtest 'add_a_record strips zone suffix from hostname (prevents doubling)' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/auth_zone', {
+        results => [{ id => 'dns/auth_zone/zone-uuid-456', fqdn => 'blox42.rocks.' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [],
+    });
+    mock_api::mock_response('POST', '/dns/record', {
+        result => { id => 'dns/record/new-gw-uuid' },
+    });
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->add_a_record(
+            $config, 'blox42.rocks', 'blox42-gw.blox42.rocks', '10.0.0.1', 0,
+        );
+    };
+    is($@, '', 'add_a_record succeeds with zone-suffixed hostname');
+
+    my $calls = mock_api::get_all_calls();
+    my @post_calls = grep { $_->{method} eq 'POST' } @$calls;
+    is($post_calls[0]->{params}->{name_in_zone}, 'blox42-gw',
+       'name_in_zone is stripped to short hostname (not blox42-gw.blox42.rocks)');
+};
+
+subtest 'del_a_record strips zone suffix from hostname (prevents doubling)' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/dns/view', {
+        results => [{ id => 'dns/view/view-uuid-123', name => 'TestView' }],
+    });
+    mock_api::mock_response('GET', '/dns/record', {
+        results => [{ id => 'dns/record/gw-to-delete', type => 'A' }],
+    });
+    mock_api::mock_response('DELETE', '/dns/record', {});
+
+    eval {
+        PVE::Network::SDN::Dns::InfobloxPlugin->del_a_record(
+            $config, 'blox42.rocks', 'blox42-gw.blox42.rocks', '10.0.0.1', 0,
+        );
+    };
+    is($@, '', 'del_a_record succeeds with zone-suffixed hostname');
+
+    # Verify the GET lookup used the correct (non-doubled) FQDN
+    my $calls = mock_api::get_all_calls();
+    my @get_rec_calls = grep { $_->{method} eq 'GET' && $_->{url} =~ /dns\/record/ } @$calls;
+    # The FQDN in the filter should be "blox42-gw.blox42.rocks." (not doubled)
+    like($get_rec_calls[0]->{url}, qr/blox42-gw\.blox42\.rocks\./,
+         'record lookup uses correct FQDN (not doubled)');
+    unlike($get_rec_calls[0]->{url}, qr/blox42-gw\.blox42\.rocks\.blox42\.rocks/,
+         'record lookup does NOT have doubled zone');
 };
 
 # -- Coverage summary test --

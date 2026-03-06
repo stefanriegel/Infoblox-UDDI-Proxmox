@@ -784,6 +784,8 @@ subtest 'get_ips_from_mac returns matching IPv4 addresses' => sub {
     my @get_calls = grep { $_->{method} eq 'GET' } @$calls;
     ok(scalar @get_calls >= 1, 'at least one GET call made');
     like($get_calls[-1]->{url}, qr/hwaddr/, 'query includes hwaddr filter');
+    like($get_calls[-1]->{url}, qr/aa:bb:cc:dd:ee:ff/,
+         'hwaddr filter uses lowercased MAC');
 };
 
 subtest 'get_ips_from_mac with IPv4 and IPv6 addresses' => sub {
@@ -829,6 +831,28 @@ subtest 'get_ips_from_mac with API error returns undef (graceful)' => sub {
 
     is($ip4, undef, 'ip4 is undef on error');
     is($ip6, undef, 'ip6 is undef on error');
+};
+
+subtest 'get_ips_from_mac lowercases MAC for API filter' => sub {
+    mock_api::clear_mocks();
+    mock_api::mock_response('GET', '/ipam/address', {
+        results => [
+            { address => '10.0.0.99' },
+        ],
+    });
+
+    my ($ip4, $ip6) = PVE::Network::SDN::Ipams::InfobloxPlugin->get_ips_from_mac(
+        $config, 'BC:24:11:AA:BB:CC', 'simple1',
+    );
+
+    is($ip4, '10.0.0.99', 'returns IP despite uppercase MAC input');
+
+    my $calls = mock_api::get_all_calls();
+    my @get_calls = grep { $_->{method} eq 'GET' } @$calls;
+    like($get_calls[-1]->{url}, qr/bc:24:11:aa:bb:cc/,
+         'API filter contains lowercased MAC');
+    unlike($get_calls[-1]->{url}, qr/BC:24:11:AA:BB:CC/,
+           'API filter does NOT contain original uppercase MAC');
 };
 
 # -- Coverage summary test --

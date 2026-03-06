@@ -401,6 +401,10 @@ sub add_range_next_freeip {
 sub get_ips_from_mac {
     my ($class, $plugin_config, $mac, $zone) = @_;
 
+    # Proxmox stores MACs uppercase, Infoblox stores them lowercase.
+    # Lowercase before querying to ensure the hwaddr filter matches.
+    $mac = lc($mac);
+
     # Returns ($ip4_scalar, $ip6_scalar) matching PVE's Ipams.pm expectation
     my $ip4 = undef;
     my $ip6 = undef;
